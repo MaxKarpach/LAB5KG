@@ -1,8 +1,3 @@
-// ================================================================
-// Shaders.hlsl  -  Одна текстура, без вращения
-// ================================================================
-
-// ---- Constant buffer (b0) ----
 cbuffer ConstantBuffer : register(b0)
 {
     float4x4 World;
@@ -15,13 +10,9 @@ cbuffer ConstantBuffer : register(b0)
     float2   UVOffset;
 };
 
-// ---- ТОЛЬКО ОДНА ТЕКСТУРА ----
 Texture2D    gTexture  : register(t0);
 SamplerState gSampler  : register(s0);
 
-// ================================================================
-// Vertex Shader I/O
-// ================================================================
 struct VSInput
 {
     float3 Position : POSITION;
@@ -39,9 +30,6 @@ struct PSInput
     float2 TexCoord : TEXCOORD2;
 };
 
-// ================================================================
-// Vertex Shader
-// ================================================================
 PSInput VSMain(VSInput input)
 {
     PSInput output;
@@ -59,9 +47,6 @@ PSInput VSMain(VSInput input)
     return output;
 }
 
-// ================================================================
-// Pixel Shader  -  Одна текстура + освещение
-// ================================================================
 float4 PSMain(PSInput input) : SV_TARGET
 {
     float3 N = normalize(input.Normal);
@@ -82,7 +67,7 @@ float4 PSMain(PSInput input) : SV_TARGET
     float  spec = pow(max(dot(V, R), 0.0f), shininess);
     float3 specular = 0.3f * spec * LightColor.rgb;
 
-    // ---- ОДНА ТЕКСТУРА ----
+    // ---- ТЕКСТУРА ----
     float4 texColor = gTexture.Sample(gSampler, input.TexCoord);
 
     // ---- Combine ----

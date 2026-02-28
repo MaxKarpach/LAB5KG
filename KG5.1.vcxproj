@@ -32,11 +32,11 @@
     <ClInclude Include="ObjLoader.h" />
     <ClInclude Include="TextureLoader.h" />
     <ClInclude Include="Types.h" />
-    <ClInclude Include="Utils.h" />
+    <ClInclude Include="ThrowIfFailed.h" />
     <ClInclude Include="Window.h" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="Shaders.hlsl">
+    <None Include="shaders.hlsl">
       <FileType>Document</FileType>
     </None>
   </ItemGroup>

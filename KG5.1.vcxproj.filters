@@ -47,7 +47,7 @@
     <ClInclude Include="Types.h">
       <Filter>Исходные файлы</Filter>
     </ClInclude>
-    <ClInclude Include="Utils.h">
+    <ClInclude Include="ThrowIfFailed.h">
       <Filter>Исходные файлы</Filter>
     </ClInclude>
     <ClInclude Include="Window.h">
@@ -58,7 +58,7 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <None Include="Shaders.hlsl">
+    <None Include="shaders.hlsl">
       <Filter>Исходные файлы</Filter>
     </None>
   </ItemGroup>

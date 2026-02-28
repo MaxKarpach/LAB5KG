@@ -17,10 +17,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
     // Явно захватываем app по ссылке
     window->OnResize = [&app](int w, int h)
         {
-            if (app) app->OnResize(w, h);
+            if (app) app->Resize(w, h);
         };
 
-    if (!app->Start())
+    if (!app->Initialize())
         return -1;
 
     // Явно захватываем window и app по ссылке
@@ -28,11 +28,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
         [&window, &app](float dt)
         {
             window->GetInputDevice()->Update();
-            if (app) app->OnUpdate(dt);
+            if (app) app->Update(dt);
         },
         [&app]()
         {
-            if (app) app->OnRender();
+            if (app) app->Render();
         }
     );
 }

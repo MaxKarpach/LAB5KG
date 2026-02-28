@@ -25,10 +25,10 @@ public:
     DirectXApp(HWND windowHandle, int windowWidth, int windowHeight);
     ~DirectXApp();
 
-    bool Start();
-    void OnUpdate(float deltaTime);
-    void OnRender();
-    void OnResize(int newWidth, int newHeight);
+    bool Initialize();
+    void Update(float deltaTime);
+    void Render();
+    void Resize(int newWidth, int newHeight);
 
 private:
     // ----- Setup methods -----
@@ -44,12 +44,12 @@ private:
     void CreatePipelineState();
     void CreateDefaultGeometry();
     void ImportModel(const std::wstring& modelPath);
-    void UploadTextureData(const TextureData& texData, int textureSlot = 0);
+    void UploadTexture(const TextureData& texData, int textureSlot = 0);
     void CreateConstantBuffer();
 
     // ----- Synchronization -----
-    void WaitForGPU();
-    void AdvanceToNextFrame();
+    void FlushCommandQueue();
+    void MoveToNextFrame();
 
     // ----- Rendering -----
     void BuildCommandList();

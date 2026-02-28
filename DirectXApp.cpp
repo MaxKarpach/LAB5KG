@@ -1,5 +1,5 @@
 #include "DirectXApp.h"
-#include "Utils.h"
+#include "ThrowIfFailed.h"
 #include <cassert>
 
 //  Constructor / Destructor
@@ -16,7 +16,7 @@ DirectXApp::~DirectXApp()
 {
     if (m_cmdQueue && m_fence && m_fenceEvent)
     {
-        try { WaitForGPU(); }
+        try { FlushCommandQueue(); }
         catch (...) {}
     }
 
@@ -27,133 +27,6 @@ DirectXApp::~DirectXApp()
         CloseHandle(m_fenceEvent);
 }
 
-//  Start - initialization entry point
-bool DirectXApp::Start()
-{
-    try
-    {
-        // Initialize D3D12 components
-        CreateD3DDevice();
-        CreateCommandQueue();
-        CreateSwapChain();
-        CreateDescriptorHeaps();
-        CreateRenderTargets();
-        CreateDepthBuffer();
-        CreateCommandList();
-        CreateSyncObjects();
-        CreateRootSignature();
-        CreatePipelineState();
-
-        // Open command list for uploading
-        ThrowIfFailed(m_cmdAllocators[0]->Reset());
-        ThrowIfFailed(m_cmdList->Reset(m_cmdAllocators[0].Get(), nullptr));
-
-        // Load model and textures
-        {
-            wchar_t exePath[MAX_PATH] = {};
-            GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-            std::wstring workingDir(exePath);
-            workingDir = workingDir.substr(0, workingDir.find_last_of(L"\\/") + 1);
-
-            // Load the head model
-// Load the head model
-            ObjResult modelData = LoadObj(workingDir + L"model.obj");  // верни как было
-            if (modelData.valid)
-                BuildMeshBuffers(modelData.vertices, modelData.indices);
-            else
-                CreateDefaultGeometry();
-
-            // First texture (slot 0)
-            TextureData texData1 = LoadTextureWIC(workingDir + L"texture_first.png");
-            if (!texData1.valid) texData1 = LoadTextureWIC(workingDir + L"texture_first.jpg");
-            if (!texData1.valid)
-            {
-                MessageBoxW(m_windowHandle,
-                    (L"Missing texture file!\n\nExpected:\n" + workingDir + L"texture_first.jpg").c_str(),
-                    L"Texture Error", MB_OK | MB_ICONERROR);
-                return false;
-            }
-            UploadTextureData(texData1, 0);
-        }
-
-        // Execute upload commands
-        ThrowIfFailed(m_cmdList->Close());
-        ID3D12CommandList* commandLists[] = { m_cmdList.Get() };
-        m_cmdQueue->ExecuteCommandLists(1, commandLists);
-        WaitForGPU();
-
-        // Release upload buffers
-        m_textureFirstUpload.Reset();
-        m_textureSecondUpload.Reset();
-
-        CreateConstantBuffer();
-    }
-    catch (const std::exception& e)
-    {
-        MessageBoxA(m_windowHandle, e.what(), "Initialization Error", MB_OK | MB_ICONERROR);
-        return false;
-    }
-    return true;
-}
-
-//  Device Creation
-void DirectXApp::CreateD3DDevice()
-{
-#ifdef _DEBUG
-    ComPtr<ID3D12Debug> debugLayer;
-    if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugLayer))))
-        debugLayer->EnableDebugLayer();
-#endif
-
-    ComPtr<IDXGIFactory6> dxgiFactory;
-    ThrowIfFailed(CreateDXGIFactory1(IID_PPV_ARGS(&dxgiFactory)));
-
-    ComPtr<IDXGIAdapter1> graphicsAdapter;
-    for (UINT adapterIndex = 0; ; ++adapterIndex)
-    {
-        if (dxgiFactory->EnumAdapterByGpuPreference(
-            adapterIndex, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
-            IID_PPV_ARGS(&graphicsAdapter)) == DXGI_ERROR_NOT_FOUND)
-            break;
-
-        if (SUCCEEDED(D3D12CreateDevice(graphicsAdapter.Get(),
-            D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&m_d3dDevice))))
-            return;
-    }
-    ThrowIfFailed(E_FAIL, "No compatible graphics device found");
-}
-
-//  Command Queue
-void DirectXApp::CreateCommandQueue()
-{
-    D3D12_COMMAND_QUEUE_DESC queueDesc = {};
-    queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-    queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
-    ThrowIfFailed(m_d3dDevice->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&m_cmdQueue)));
-}
-
-//  Swap Chain
-void DirectXApp::CreateSwapChain()
-{
-    ComPtr<IDXGIFactory4> dxgiFactory;
-    ThrowIfFailed(CreateDXGIFactory1(IID_PPV_ARGS(&dxgiFactory)));
-
-    DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
-    swapChainDesc.BufferCount = BACK_BUFFER_COUNT;
-    swapChainDesc.Width = static_cast<UINT>(m_screenWidth);
-    swapChainDesc.Height = static_cast<UINT>(m_screenHeight);
-    swapChainDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-    swapChainDesc.SampleDesc = { 1, 0 };
-
-    ComPtr<IDXGISwapChain1> tempSwapChain;
-    ThrowIfFailed(dxgiFactory->CreateSwapChainForHwnd(
-        m_cmdQueue.Get(), m_windowHandle, &swapChainDesc, nullptr, nullptr, &tempSwapChain));
-    dxgiFactory->MakeWindowAssociation(m_windowHandle, DXGI_MWA_NO_ALT_ENTER);
-    ThrowIfFailed(tempSwapChain.As(&m_swapChain));
-    m_currentBackBuffer = m_swapChain->GetCurrentBackBufferIndex();
-}
 //  Descriptor Heaps
 void DirectXApp::CreateDescriptorHeaps()
 {
@@ -175,10 +48,10 @@ void DirectXApp::CreateDescriptorHeaps()
         ThrowIfFailed(m_d3dDevice->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_dsvHeap)));
     }
 
-    // SRV heap (2 textures)
+    // SRV heap 
     {
         D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-        heapDesc.NumDescriptors = 2;
+        heapDesc.NumDescriptors = 1;
         heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         ThrowIfFailed(m_d3dDevice->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_srvHeap)));
@@ -351,7 +224,7 @@ void DirectXApp::CreatePipelineState()
     wchar_t exePath[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, exePath, MAX_PATH);
     std::wstring filePath(exePath);
-    filePath = filePath.substr(0, filePath.find_last_of(L"\\/") + 1) + L"Shaders.hlsl";
+    filePath = filePath.substr(0, filePath.find_last_of(L"\\/") + 1) + L"shaders.hlsl";
 
     auto vertexShader = CompileShaderFile(filePath, "VSMain", "vs_5_0");
     auto pixelShader = CompileShaderFile(filePath, "PSMain", "ps_5_0");
@@ -517,7 +390,7 @@ void DirectXApp::ImportModel(const std::wstring& modelPath)
 }
 
 //  Texture Upload
-void DirectXApp::UploadTextureData(const TextureData& texData, int textureSlot)
+void DirectXApp::UploadTexture(const TextureData& texData, int textureSlot)
 {
     if (!texData.valid || texData.width == 0 || texData.height == 0)
         ThrowIfFailed(E_INVALIDARG, "Invalid texture data provided");
@@ -611,6 +484,29 @@ void DirectXApp::UploadTextureData(const TextureData& texData, int textureSlot)
     m_d3dDevice->CreateShaderResourceView(targetTexture.Get(), &srvDesc, srvHandle);
 }
 
+//  Swap Chain
+void DirectXApp::CreateSwapChain()
+{
+    ComPtr<IDXGIFactory4> dxgiFactory;
+    ThrowIfFailed(CreateDXGIFactory1(IID_PPV_ARGS(&dxgiFactory)));
+
+    DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
+    swapChainDesc.BufferCount = BACK_BUFFER_COUNT;
+    swapChainDesc.Width = static_cast<UINT>(m_screenWidth);
+    swapChainDesc.Height = static_cast<UINT>(m_screenHeight);
+    swapChainDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    swapChainDesc.SampleDesc = { 1, 0 };
+
+    ComPtr<IDXGISwapChain1> tempSwapChain;
+    ThrowIfFailed(dxgiFactory->CreateSwapChainForHwnd(
+        m_cmdQueue.Get(), m_windowHandle, &swapChainDesc, nullptr, nullptr, &tempSwapChain));
+    dxgiFactory->MakeWindowAssociation(m_windowHandle, DXGI_MWA_NO_ALT_ENTER);
+    ThrowIfFailed(tempSwapChain.As(&m_swapChain));
+    m_currentBackBuffer = m_swapChain->GetCurrentBackBufferIndex();
+}
+
 //  Constant Buffer
 void DirectXApp::CreateConstantBuffer()
 {
@@ -639,7 +535,7 @@ void DirectXApp::CreateConstantBuffer()
 }
 
 //  Update
-void DirectXApp::OnUpdate(float deltaTime)
+void DirectXApp::Update(float deltaTime)
 {
     m_rotationAngle += 0.8f * deltaTime;
     m_uvOffsetX += 0.05f * deltaTime;
@@ -648,7 +544,6 @@ void DirectXApp::OnUpdate(float deltaTime)
     if (m_uvOffsetX > 1.0f) m_uvOffsetX -= 1.0f;
     if (m_uvOffsetY > 1.0f) m_uvOffsetY -= 1.0f;
 
-    // Вместо XMMatrixIdentity() используй поворот на 180 градусов
     XMMATRIX worldMatrix = XMMatrixRotationY(XM_PI);  // XM_PI = 180 градусов
     XMVECTOR cameraPos = XMVectorSet(0.0f, 1.0f, -3.0f, 1.0f);
     XMVECTOR targetPos = XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
@@ -674,7 +569,7 @@ void DirectXApp::OnUpdate(float deltaTime)
 }
 
 //  Render
-void DirectXApp::OnRender()
+void DirectXApp::Render()
 {
     BuildCommandList();
 
@@ -682,7 +577,7 @@ void DirectXApp::OnRender()
     m_cmdQueue->ExecuteCommandLists(1, commandLists);
 
     ThrowIfFailed(m_swapChain->Present(1, 0));
-    AdvanceToNextFrame();
+    MoveToNextFrame();
 }
 
 void DirectXApp::BuildCommandList()
@@ -738,12 +633,12 @@ void DirectXApp::BuildCommandList()
 }
 
 //  Resize
-void DirectXApp::OnResize(int newWidth, int newHeight)
+void DirectXApp::Resize(int newWidth, int newHeight)
 {
     if (newWidth <= 0 || newHeight <= 0) return;
     if (!m_swapChain || !m_d3dDevice) return;
 
-    WaitForGPU();
+    FlushCommandQueue();
 
     m_screenWidth = newWidth;
     m_screenHeight = newHeight;
@@ -766,7 +661,7 @@ void DirectXApp::OnResize(int newWidth, int newHeight)
 }
 
 //  Synchronization Methods
-void DirectXApp::WaitForGPU()
+void DirectXApp::FlushCommandQueue()
 {
     ThrowIfFailed(m_cmdQueue->Signal(m_fence.Get(), m_fenceValues[m_currentBackBuffer]));
     ThrowIfFailed(m_fence->SetEventOnCompletion(m_fenceValues[m_currentBackBuffer], m_fenceEvent));
@@ -774,7 +669,7 @@ void DirectXApp::WaitForGPU()
     ++m_fenceValues[m_currentBackBuffer];
 }
 
-void DirectXApp::AdvanceToNextFrame()
+void DirectXApp::MoveToNextFrame()
 {
     const UINT64 currentFence = m_fenceValues[m_currentBackBuffer];
     ThrowIfFailed(m_cmdQueue->Signal(m_fence.Get(), currentFence));
@@ -786,4 +681,108 @@ void DirectXApp::AdvanceToNextFrame()
         ::WaitForSingleObjectEx(m_fenceEvent, INFINITE, FALSE);
     }
     m_fenceValues[m_currentBackBuffer] = currentFence + 1;
+}
+
+//  Command Queue
+void DirectXApp::CreateCommandQueue()
+{
+    D3D12_COMMAND_QUEUE_DESC queueDesc = {};
+    queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+    ThrowIfFailed(m_d3dDevice->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&m_cmdQueue)));
+}
+
+
+bool DirectXApp::Initialize()
+{
+    try
+    {
+        // Initialize D3D12 components
+        CreateD3DDevice();
+        CreateCommandQueue();
+        CreateSwapChain();
+        CreateDescriptorHeaps();
+        CreateRenderTargets();
+        CreateDepthBuffer();
+        CreateCommandList();
+        CreateSyncObjects();
+        CreateRootSignature();
+        CreatePipelineState();
+
+        // Open command list for uploading
+        ThrowIfFailed(m_cmdAllocators[0]->Reset());
+        ThrowIfFailed(m_cmdList->Reset(m_cmdAllocators[0].Get(), nullptr));
+
+        // Load model and textures
+        {
+            wchar_t exePath[MAX_PATH] = {};
+            GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+            std::wstring workingDir(exePath);
+            workingDir = workingDir.substr(0, workingDir.find_last_of(L"\\/") + 1);
+
+            // Load the head model
+// Load the head model
+            ObjResult modelData = LoadObj(workingDir + L"model.obj");  // верни как было
+            if (modelData.valid)
+                BuildMeshBuffers(modelData.vertices, modelData.indices);
+            else
+                CreateDefaultGeometry();
+
+            // First texture (slot 0)
+            TextureData texData1 = LoadTextureWIC(workingDir + L"texture_first.png");
+            if (!texData1.valid) texData1 = LoadTextureWIC(workingDir + L"texture_first.jpg");
+            if (!texData1.valid)
+            {
+                MessageBoxW(m_windowHandle,
+                    (L"Missing texture file!\n\nExpected:\n" + workingDir + L"texture_first.jpg").c_str(),
+                    L"Texture Error", MB_OK | MB_ICONERROR);
+                return false;
+            }
+            UploadTexture(texData1, 0);
+        }
+
+        // Execute upload commands
+        ThrowIfFailed(m_cmdList->Close());
+        ID3D12CommandList* commandLists[] = { m_cmdList.Get() };
+        m_cmdQueue->ExecuteCommandLists(1, commandLists);
+        FlushCommandQueue();
+
+        // Release upload buffers
+        m_textureFirstUpload.Reset();
+        m_textureSecondUpload.Reset();
+
+        CreateConstantBuffer();
+    }
+    catch (const std::exception& e)
+    {
+        MessageBoxA(m_windowHandle, e.what(), "Initialization Error", MB_OK | MB_ICONERROR);
+        return false;
+    }
+    return true;
+}
+
+void DirectXApp::CreateD3DDevice()
+{
+#ifdef _DEBUG
+    ComPtr<ID3D12Debug> debugLayer;
+    if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugLayer))))
+        debugLayer->EnableDebugLayer();
+#endif
+
+    ComPtr<IDXGIFactory6> dxgiFactory;
+    ThrowIfFailed(CreateDXGIFactory1(IID_PPV_ARGS(&dxgiFactory)));
+
+    ComPtr<IDXGIAdapter1> graphicsAdapter;
+    for (UINT adapterIndex = 0; ; ++adapterIndex)
+    {
+        if (dxgiFactory->EnumAdapterByGpuPreference(
+            adapterIndex, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
+            IID_PPV_ARGS(&graphicsAdapter)) == DXGI_ERROR_NOT_FOUND)
+            break;
+
+        if (SUCCEEDED(D3D12CreateDevice(graphicsAdapter.Get(),
+            D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&m_d3dDevice))))
+            return;
+    }
+    ThrowIfFailed(E_FAIL, "No compatible graphics device found");
 }
