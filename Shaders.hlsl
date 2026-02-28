@@ -10,8 +10,9 @@ cbuffer ConstantBuffer : register(b0)
     float2   UVOffset;
 };
 
-Texture2D    gTexture  : register(t0);
-SamplerState gSampler  : register(s0);
+Texture2D gTextureFirst  : register(t0);
+Texture2D gTextureSecond : register(t1);
+SamplerState gSampler : register(s0);
 
 struct VSInput
 {
@@ -42,7 +43,8 @@ PSInput VSMain(VSInput input)
     output.WorldPos = worldPos.xyz;
     output.Normal   = normalize(mul(float4(input.Normal, 0.0f), World).xyz);
     output.Color    = input.Color;
-    output.TexCoord = input.TexCoord;  // просто UV, без тайлинга
+    
+    output.TexCoord = input.TexCoord;
 
     return output;
 }
@@ -67,8 +69,25 @@ float4 PSMain(PSInput input) : SV_TARGET
     float  spec = pow(max(dot(V, R), 0.0f), shininess);
     float3 specular = 0.3f * spec * LightColor.rgb;
 
-    // ---- ТЕКСТУРА ----
-    float4 texColor = gTexture.Sample(gSampler, input.TexCoord);
+    float cellsPerSide = 6.0f;
+    
+    float2 animatedUV = input.TexCoord + UVOffset * 0.5f;  // Множитель регулирует скорость
+    
+    float2 cellIndex = floor(animatedUV * cellsPerSide);
+    float2 cellUV = frac(animatedUV * cellsPerSide);
+    
+    float isEven = fmod(cellIndex.x + cellIndex.y, 2.0f);
+    
+    // Выбираем текстуру
+    float4 texColor;
+    if (isEven < 0.5f)
+    {
+        texColor = gTextureFirst.Sample(gSampler, cellUV);
+    }
+    else
+    {
+        texColor = gTextureSecond.Sample(gSampler, cellUV);
+    }
 
     // ---- Combine ----
     float3 lighting = ambient + diffuse + specular;

@@ -51,7 +51,7 @@ void DirectXApp::CreateDescriptorHeaps()
     // SRV heap 
     {
         D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-        heapDesc.NumDescriptors = 1;
+        heapDesc.NumDescriptors = 2;  // 2 текстуры
         heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         ThrowIfFailed(m_d3dDevice->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_srvHeap)));
@@ -145,7 +145,7 @@ void DirectXApp::CreateRootSignature()
     // Parameter 1: Shader Resource View table (textures)
     D3D12_DESCRIPTOR_RANGE srvRange = {};
     srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srvRange.NumDescriptors = 2;
+    srvRange.NumDescriptors = 2;  // 2 текстуры
     srvRange.BaseShaderRegister = 0;
     srvRange.RegisterSpace = 0;
     srvRange.OffsetInDescriptorsFromTableStart = 0;
@@ -220,7 +220,10 @@ ComPtr<ID3DBlob> DirectXApp::CompileShaderFile(const std::wstring& filePath,
 }
 
 void DirectXApp::CreatePipelineState()
+
 {
+
+   // m_pipelineState.Reset();
     wchar_t exePath[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, exePath, MAX_PATH);
     std::wstring filePath(exePath);
@@ -538,13 +541,13 @@ void DirectXApp::CreateConstantBuffer()
 void DirectXApp::Update(float deltaTime)
 {
     m_rotationAngle += 0.8f * deltaTime;
-    m_uvOffsetX += 0.05f * deltaTime;
-    m_uvOffsetY += 0.02f * deltaTime;
+    m_uvOffsetX += 0.2f * deltaTime;
+    m_uvOffsetY += 0.2f * deltaTime;
 
     if (m_uvOffsetX > 1.0f) m_uvOffsetX -= 1.0f;
     if (m_uvOffsetY > 1.0f) m_uvOffsetY -= 1.0f;
 
-    XMMATRIX worldMatrix = XMMatrixRotationY(XM_PI);  // XM_PI = 180 градусов
+    XMMATRIX worldMatrix = XMMatrixRotationY(XM_PI);
     XMVECTOR cameraPos = XMVectorSet(0.0f, 1.0f, -3.0f, 1.0f);
     XMVECTOR targetPos = XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
     XMVECTOR upVector = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
@@ -692,7 +695,6 @@ void DirectXApp::CreateCommandQueue()
     ThrowIfFailed(m_d3dDevice->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&m_cmdQueue)));
 }
 
-
 bool DirectXApp::Initialize()
 {
     try
@@ -721,8 +723,7 @@ bool DirectXApp::Initialize()
             workingDir = workingDir.substr(0, workingDir.find_last_of(L"\\/") + 1);
 
             // Load the head model
-// Load the head model
-            ObjResult modelData = LoadObj(workingDir + L"model.obj");  // верни как было
+            ObjResult modelData = LoadObj(workingDir + L"model.obj");
             if (modelData.valid)
                 BuildMeshBuffers(modelData.vertices, modelData.indices);
             else
@@ -730,15 +731,29 @@ bool DirectXApp::Initialize()
 
             // First texture (slot 0)
             TextureData texData1 = LoadTextureWIC(workingDir + L"texture_first.png");
-            if (!texData1.valid) texData1 = LoadTextureWIC(workingDir + L"texture_first.jpg");
+            if (!texData1.valid)
+                texData1 = LoadTextureWIC(workingDir + L"texture_first.jpg");
             if (!texData1.valid)
             {
                 MessageBoxW(m_windowHandle,
-                    (L"Missing texture file!\n\nExpected:\n" + workingDir + L"texture_first.jpg").c_str(),
+                    (L"Missing first texture file!\n\nExpected:\n" + workingDir + L"texture_first.jpg").c_str(),
                     L"Texture Error", MB_OK | MB_ICONERROR);
                 return false;
             }
             UploadTexture(texData1, 0);
+
+            // Second texture (slot 1)
+            TextureData texData2 = LoadTextureWIC(workingDir + L"texture_second.png");
+            if (!texData2.valid)
+                texData2 = LoadTextureWIC(workingDir + L"texture_second.jpg");
+            if (!texData2.valid)
+            {
+                MessageBoxW(m_windowHandle,
+                    (L"Missing second texture file!\n\nExpected:\n" + workingDir + L"texture_second.jpg").c_str(),
+                    L"Texture Error", MB_OK | MB_ICONERROR);
+                return false;
+            }
+            UploadTexture(texData2, 1);
         }
 
         // Execute upload commands
@@ -755,7 +770,14 @@ bool DirectXApp::Initialize()
     }
     catch (const std::exception& e)
     {
-        MessageBoxA(m_windowHandle, e.what(), "Initialization Error", MB_OK | MB_ICONERROR);
+        std::string errorMsg = "Exception: ";
+        errorMsg += e.what();
+        MessageBoxA(m_windowHandle, errorMsg.c_str(), "Initialization Error", MB_OK | MB_ICONERROR);
+        return false;
+    }
+    catch (...)
+    {
+        MessageBoxA(m_windowHandle, "Unknown exception occurred!", "Initialization Error", MB_OK | MB_ICONERROR);
         return false;
     }
     return true;
