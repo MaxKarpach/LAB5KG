@@ -20,16 +20,20 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="DirectXApp.cpp" />
+    <ClCompile Include="GBuffer.cpp" />
     <ClCompile Include="InputDevice.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="ObjLoader.cpp" />
+    <ClCompile Include="RenderingSystem.cpp" />
     <ClCompile Include="TextureLoader.cpp" />
     <ClCompile Include="Window.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="DirectXApp.h" />
+    <ClInclude Include="GBuffer.h" />
     <ClInclude Include="InputDevice.h" />
     <ClInclude Include="ObjLoader.h" />
+    <ClInclude Include="RenderingSystem.h" />
     <ClInclude Include="TextureLoader.h" />
     <ClInclude Include="Types.h" />
     <ClInclude Include="ThrowIfFailed.h" />

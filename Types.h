@@ -1,26 +1,32 @@
 #pragma once
 #include <DirectXMath.h>
+#include <d3d12.h>
+
 using namespace DirectX;
 
-// ---- Vertex (with UV) ----
 struct Vertex
 {
-    XMFLOAT3 Position;  // 12
-    XMFLOAT3 Normal;    // 12
-    XMFLOAT4 Color;     // 16
-    XMFLOAT2 TexCoord;  // 8   -> total = 48 bytes
+    XMFLOAT3 Position;
+    XMFLOAT3 Normal;
+    XMFLOAT4 Color;
+    XMFLOAT2 TexCoord;
 };
 
-// ---- Constant Buffer (256 bytes exactly) ----
 struct ConstantBufferData
 {
-    XMMATRIX World;       // 64
-    XMMATRIX View;        // 64
-    XMMATRIX Proj;        // 64
-    XMFLOAT4 LightPos;    // 16
-    XMFLOAT4 LightColor;  // 16
-    XMFLOAT4 CameraPos;   // 16
-    XMFLOAT2 Tiling;      //  8  -- texture tiling factor (U, V)
-    XMFLOAT2 UVOffset;    //  8  -- animated UV scroll offset
-                          // total = 256
+    XMMATRIX World;
+    XMMATRIX View;
+    XMMATRIX Proj;
+    XMFLOAT4 LightPos;
+    XMFLOAT4 LightColor;
+    XMFLOAT4 CameraPos;
+    XMFLOAT2 Tiling;
+    XMFLOAT2 UVOffset;
+};
+
+struct GBufferData
+{
+    XMFLOAT4 AlbedoSpec;  // rgb = albedo, a = specular
+    XMFLOAT4 Normal;       // normal
+    XMFLOAT4 WorldPos;     // world position
 };

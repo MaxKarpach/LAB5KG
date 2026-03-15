@@ -5,6 +5,7 @@
 #include <wrl/client.h>
 #include <vector>
 #include <string>
+#include <memory>
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -14,6 +15,7 @@
 #include "Types.h"
 #include "TextureLoader.h"
 #include "ObjLoader.h"
+#include "GBuffer.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -47,6 +49,15 @@ private:
     void UploadTexture(const TextureData& texData, int textureSlot = 0);
     void CreateConstantBuffer();
 
+    // ----- Deferred rendering methods -----
+    void CreateDeferredRootSignatures();
+    void CreateDeferredPipelines();
+    void CreateLightingConstantBuffer();
+    void RenderDeferredFrame();
+    void RenderGeometryPass();
+    void RenderLightingPass();
+    void UpdateLightingConstants();
+
     // ----- Synchronization -----
     void FlushCommandQueue();
     void MoveToNextFrame();
@@ -65,6 +76,23 @@ private:
     ComPtr<ID3DBlob> CompileShaderFile(const std::wstring& filePath,
         const std::string& entryPoint,
         const std::string& shaderModel);
+
+    // Deferred lighting constants structure
+    struct DeferredLightCB
+    {
+        DirectX::XMFLOAT4 DirectionalLightDirection;    // Переименовано
+        DirectX::XMFLOAT4 DirectionalLightColor;        // Переименовано
+        DirectX::XMFLOAT4 AmbientColor;
+        DirectX::XMFLOAT4 LightCounts;
+        DirectX::XMFLOAT4 PointLightPositionRange[6];
+        DirectX::XMFLOAT4 PointLightColorIntensity[6];
+        DirectX::XMFLOAT4 SpotLightPositionRange[4];
+        DirectX::XMFLOAT4 SpotLightDirectionCosine[4];
+        DirectX::XMFLOAT4 SpotLightColorIntensity[4];
+        DirectX::XMFLOAT4 ScreenSize;
+        DirectX::XMFLOAT4X4 InvView;
+        DirectX::XMFLOAT4X4 InvProj;
+    };
 
     // Window properties
     HWND m_windowHandle;
@@ -97,7 +125,10 @@ private:
 
     // Pipeline
     ComPtr<ID3D12RootSignature>       m_rootSignature;
-    ComPtr<ID3D12PipelineState>       m_pipelineState;
+    ComPtr<ID3D12RootSignature>       m_deferredLightingRootSignature;
+    ComPtr<ID3D12PipelineState>       m_pipelineState;          // Forward rendering PSO
+    ComPtr<ID3D12PipelineState>       m_deferredGeometryPSO;    // Geometry pass PSO
+    ComPtr<ID3D12PipelineState>       m_deferredLightingPSO;    // Lighting pass PSO
 
     // Geometry
     ComPtr<ID3D12Resource>            m_vertexBuffer;
@@ -112,13 +143,22 @@ private:
     ComPtr<ID3D12Resource>            m_textureSecond;
     ComPtr<ID3D12Resource>            m_textureSecondUpload;
 
-    // Constant buffer
-    ComPtr<ID3D12Resource>            m_constantBuffer;
+    // Constant buffers
+    ComPtr<ID3D12Resource>            m_constantBuffer;         // Forward rendering CB
     ConstantBufferData* m_mappedConstantData = nullptr;
+
+    ComPtr<ID3D12Resource>            m_deferredLightConstantBuffer; // Lighting CB
+    uint8_t* m_deferredLightCBMappedData = nullptr;
+
+    // GBuffer
+    std::unique_ptr<GBuffer>          m_gbuffer;
 
     // Fence
     ComPtr<ID3D12Fence>               m_fence;
     UINT64                            m_fenceValues[BACK_BUFFER_COUNT] = {};
     HANDLE                            m_fenceEvent = nullptr;
     UINT                              m_currentBackBuffer = 0;
+
+    // Rendering mode
+    bool m_useDeferredRendering = true;
 };

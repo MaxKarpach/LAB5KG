@@ -33,6 +33,12 @@
     <ClCompile Include="DirectXApp.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
+    <ClCompile Include="GBuffer.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
+    <ClCompile Include="RenderingSystem.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="InputDevice.h">
@@ -54,6 +60,12 @@
       <Filter>Исходные файлы</Filter>
     </ClInclude>
     <ClInclude Include="DirectXApp.h">
+      <Filter>Исходные файлы</Filter>
+    </ClInclude>
+    <ClInclude Include="GBuffer.h">
+      <Filter>Исходные файлы</Filter>
+    </ClInclude>
+    <ClInclude Include="RenderingSystem.h">
       <Filter>Исходные файлы</Filter>
     </ClInclude>
   </ItemGroup>
