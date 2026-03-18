@@ -55,7 +55,7 @@ void DirectXApp::CreateDescriptorHeaps()
     // SRV heap 
     {
         D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-        heapDesc.NumDescriptors = 2;  // 2 текстуры
+        heapDesc.NumDescriptors = 2;
         heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         ThrowIfFailed(m_d3dDevice->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_srvHeap)));
@@ -135,7 +135,6 @@ void DirectXApp::CreateSyncObjects()
         ThrowIfFailed(HRESULT_FROM_WIN32(GetLastError()));
 }
 
-
 // Pipeline State Object
 ComPtr<ID3DBlob> DirectXApp::CompileShaderFile(const std::wstring& filePath,
     const std::string& entryPoint, const std::string& shaderModel)
@@ -177,34 +176,25 @@ ComPtr<ID3DBlob> DirectXApp::CompileShaderFile(const std::wstring& filePath,
 
 void DirectXApp::CreateRootSignature()
 {
-    // Geometry shader uses:
-    // - CBV b0 (PerObjectCB)
-    // - SRV t0 (gTextureFirst)
-    // - SRV t1 (gTextureSecond)
-    // - Sampler s0
-
     D3D12_DESCRIPTOR_RANGE srvRange = {};
     srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srvRange.NumDescriptors = 2;  // t0 и t1
+    srvRange.NumDescriptors = 2;
     srvRange.BaseShaderRegister = 0;
     srvRange.RegisterSpace = 0;
     srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
     D3D12_ROOT_PARAMETER rootParams[2] = {};
 
-    // Parameter 0: CBV (b0)
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-    rootParams[0].Descriptor.ShaderRegister = 0;  // b0
+    rootParams[0].Descriptor.ShaderRegister = 0;
     rootParams[0].Descriptor.RegisterSpace = 0;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    // Parameter 1: SRV table (t0, t1)
     rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
     rootParams[1].DescriptorTable.pDescriptorRanges = &srvRange;
     rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
-    // Sampler
     D3D12_STATIC_SAMPLER_DESC sampler = {};
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
     sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -247,23 +237,20 @@ void DirectXApp::CreateRootSignature()
 
 void DirectXApp::CreateDeferredRootSignatures()
 {
-    // Создаем один дескрипторный диапазон для всех 4 текстур
     D3D12_DESCRIPTOR_RANGE srvRange = {};
     srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srvRange.NumDescriptors = 4;  // 4 текстуры: t0, t1, t2, t3
+    srvRange.NumDescriptors = 4;
     srvRange.BaseShaderRegister = 0;
     srvRange.RegisterSpace = 0;
     srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
     D3D12_ROOT_PARAMETER rootParams[2] = {};
 
-    // Parameter 0: SRV table (все 4 текстуры G-Buffer)
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParams[0].DescriptorTable.NumDescriptorRanges = 1;
     rootParams[0].DescriptorTable.pDescriptorRanges = &srvRange;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
-    // Parameter 1: CBV (b1)
     rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[1].Descriptor.ShaderRegister = 1;
     rootParams[1].Descriptor.RegisterSpace = 0;
@@ -292,47 +279,8 @@ void DirectXApp::CreateDeferredRootSignatures()
     ThrowIfFailed(hr);
 }
 
-void DirectXApp::RenderLightingPass()
-{
-    D3D12_VIEWPORT viewport = {};
-    viewport.Width = static_cast<float>(m_screenWidth);
-    viewport.Height = static_cast<float>(m_screenHeight);
-    viewport.MaxDepth = 1.0f;
-
-    D3D12_RECT scissorRect = { 0, 0, m_screenWidth, m_screenHeight };
-    m_cmdList->RSSetViewports(1, &viewport);
-    m_cmdList->RSSetScissorRects(1, &scissorRect);
-
-    D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
-    rtvHandle.ptr += m_currentBackBuffer * m_rtvDescriptorSize;
-
-    m_cmdList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
-
-    const float clearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
-    m_cmdList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
-
-    m_cmdList->SetPipelineState(m_deferredLightingPSO.Get());
-    m_cmdList->SetGraphicsRootSignature(m_deferredLightingRootSignature.Get());
-
-    // Устанавливаем дескрипторный хип с текстурами G-Buffer
-    ID3D12DescriptorHeap* heaps[] = { m_gbuffer->GetSRVHeap() };
-    m_cmdList->SetDescriptorHeaps(1, heaps);
-
-    // Устанавливаем дескрипторную таблицу, начиная с первой текстуры
-    // В SRV heap текстуры расположены в порядке: AlbedoSpec, WorldPos, Normal, Depth
-    m_cmdList->SetGraphicsRootDescriptorTable(0, m_gbuffer->GetSRVGPU(GBuffer::Slot::AlbedoSpec));
-
-    // Устанавливаем константный буфер
-    m_cmdList->SetGraphicsRootConstantBufferView(1, m_deferredLightConstantBuffer->GetGPUVirtualAddress());
-
-    // Рисуем полноэкранный quad
-    m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    m_cmdList->DrawInstanced(3, 1, 0, 0);
-}
-
 void DirectXApp::CreatePipelineState()
 {
-    // Forward rendering PSO (original)
     wchar_t exePath[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, exePath, MAX_PATH);
     std::wstring filePath(exePath);
@@ -392,7 +340,6 @@ void DirectXApp::CreateDeferredPipelines()
     std::wstring filePath(exePath);
     filePath = filePath.substr(0, filePath.find_last_of(L"\\/") + 1) + L"shaders.hlsl";
 
-    // Input layout
     D3D12_INPUT_ELEMENT_DESC inputLayout[] =
     {
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
@@ -405,19 +352,16 @@ void DirectXApp::CreateDeferredPipelines()
           D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
     };
 
-    // Rasterizer state
     D3D12_RASTERIZER_DESC rasterizerDesc = {};
     rasterizerDesc.FillMode = D3D12_FILL_MODE_SOLID;
     rasterizerDesc.CullMode = D3D12_CULL_MODE_BACK;
     rasterizerDesc.DepthClipEnable = TRUE;
 
-    // Depth stencil state for geometry pass
     D3D12_DEPTH_STENCIL_DESC depthStencilDesc = {};
     depthStencilDesc.DepthEnable = TRUE;
     depthStencilDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     depthStencilDesc.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
 
-    // Blend state for geometry pass (no blending)
     D3D12_BLEND_DESC blendDesc = {};
     for (UINT i = 0; i < 4; ++i)
     {
@@ -425,7 +369,6 @@ void DirectXApp::CreateDeferredPipelines()
         blendDesc.RenderTarget[i].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
     }
 
-    // --- GEOMETRY PASS PSO ---
     auto geometryVS = CompileShaderFile(filePath, "GeometryVSMain", "vs_5_0");
     auto geometryPS = CompileShaderFile(filePath, "GeometryPSMain", "ps_5_0");
 
@@ -440,21 +383,19 @@ void DirectXApp::CreateDeferredPipelines()
     geomPsoDesc.SampleMask = UINT_MAX;
     geomPsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     geomPsoDesc.NumRenderTargets = GBuffer::TargetCount;
-    geomPsoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;          // AlbedoSpec
-    geomPsoDesc.RTVFormats[1] = DXGI_FORMAT_R16G16B16A16_FLOAT;     // WorldPosition
-    geomPsoDesc.RTVFormats[2] = DXGI_FORMAT_R16G16B16A16_FLOAT;     // Normal
-    geomPsoDesc.RTVFormats[3] = DXGI_FORMAT_R32_FLOAT;              // Depth
+    geomPsoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    geomPsoDesc.RTVFormats[1] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    geomPsoDesc.RTVFormats[2] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    geomPsoDesc.RTVFormats[3] = DXGI_FORMAT_R32_FLOAT;
     geomPsoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     geomPsoDesc.SampleDesc = { 1, 0 };
 
     ThrowIfFailed(m_d3dDevice->CreateGraphicsPipelineState(
         &geomPsoDesc, IID_PPV_ARGS(&m_deferredGeometryPSO)));
 
-    // --- LIGHTING PASS PSO ---
     auto lightVS = CompileShaderFile(filePath, "LightVSMain", "vs_5_0");
     auto lightPS = CompileShaderFile(filePath, "LightPSMain", "ps_5_0");
 
-    // Blend state for lighting pass (additive)
     D3D12_BLEND_DESC lightBlendDesc = {};
     lightBlendDesc.RenderTarget[0].BlendEnable = TRUE;
     lightBlendDesc.RenderTarget[0].SrcBlend = D3D12_BLEND_ONE;
@@ -465,7 +406,6 @@ void DirectXApp::CreateDeferredPipelines()
     lightBlendDesc.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
     lightBlendDesc.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
-    // Depth stencil for lighting pass (disabled)
     D3D12_DEPTH_STENCIL_DESC lightDepthStencilDesc = {};
     lightDepthStencilDesc.DepthEnable = FALSE;
 
@@ -486,7 +426,6 @@ void DirectXApp::CreateDeferredPipelines()
         &lightPsoDesc, IID_PPV_ARGS(&m_deferredLightingPSO)));
 }
 
-// Buffer Helpers
 void DirectXApp::CreateUploadBuffer(const void* data, UINT64 dataSize,
     ComPtr<ID3D12Resource>& outputBuffer)
 {
@@ -534,7 +473,6 @@ void DirectXApp::BuildMeshBuffers(const std::vector<Vertex>& vertices,
     m_indexBufferView.Format = DXGI_FORMAT_R32_UINT;
 }
 
-// Geometry Generation
 std::vector<Vertex> DirectXApp::GenerateCubeMesh()
 {
     float halfSize = 0.5f;
@@ -602,7 +540,6 @@ void DirectXApp::ImportModel(const std::wstring& modelPath)
     BuildMeshBuffers(model.vertices, model.indices);
 }
 
-// Texture Upload
 void DirectXApp::UploadTexture(const TextureData& texData, int textureSlot)
 {
     if (!texData.valid || texData.width == 0 || texData.height == 0)
@@ -697,7 +634,6 @@ void DirectXApp::UploadTexture(const TextureData& texData, int textureSlot)
     m_d3dDevice->CreateShaderResourceView(targetTexture.Get(), &srvDesc, srvHandle);
 }
 
-// Swap Chain
 void DirectXApp::CreateSwapChain()
 {
     ComPtr<IDXGIFactory4> dxgiFactory;
@@ -720,7 +656,6 @@ void DirectXApp::CreateSwapChain()
     m_currentBackBuffer = m_swapChain->GetCurrentBackBufferIndex();
 }
 
-// Constant Buffer
 void DirectXApp::CreateConstantBuffer()
 {
     UINT64 bufferSize = sizeof(ConstantBufferData);
@@ -783,45 +718,90 @@ void DirectXApp::UpdateLightingConstants()
 
     DeferredLightCB cb = {};
 
-    // Directional light
-    cb.DirectionalLightDirection = DirectX::XMFLOAT4(-0.4f, -1.0f, -0.2f, 0.0f);
-    cb.DirectionalLightColor = DirectX::XMFLOAT4(0.95f, 0.95f, 0.92f, 0.25f);
-    cb.AmbientColor = DirectX::XMFLOAT4(0.08f, 0.08f, 0.10f, 1.0f);
-    cb.LightCounts = DirectX::XMFLOAT4(2.0f, 2.0f, 0.0f, 0.0f); // 2 point, 2 spot
+    // ============================================================
+    // НАПРАВЛЕННЫЙ СВЕТ – очень слабый
+    // ============================================================
+    cb.DirectionalLightDirection = DirectX::XMFLOAT4(-0.5f, -1.0f, -0.3f, 0.0f);
+    cb.DirectionalLightColor = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 0.1f); // ещё слабее
 
-    // Point lights
-    cb.PointLightPositionRange[0] = DirectX::XMFLOAT4(2.0f, 1.5f, 1.5f, 5.0f);
-    cb.PointLightColorIntensity[0] = DirectX::XMFLOAT4(1.0f, 0.3f, 0.3f, 3.0f);
+    // ============================================================
+    // ФОНОВОЕ ОСВЕЩЕНИЕ – минимальное
+    // ============================================================
+    cb.AmbientColor = DirectX::XMFLOAT4(0.05f, 0.05f, 0.05f, 1.0f); // темнее
 
-    cb.PointLightPositionRange[1] = DirectX::XMFLOAT4(-2.0f, 1.5f, -1.5f, 5.0f);
-    cb.PointLightColorIntensity[1] = DirectX::XMFLOAT4(0.3f, 0.5f, 1.0f, 3.0f);
+    // ============================================================
+    // ТОЧЕЧНЫЕ ИСТОЧНИКИ – интенсивность уменьшена до 15-20
+    // ============================================================
+    // Красный – левый дальний
+    cb.PointLightPositionRange[0] = DirectX::XMFLOAT4(-10.0f, 5.0f, -8.0f, 100.0f);
+    cb.PointLightColorIntensity[0] = DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 15.0f);
 
-    // Spot lights
-    cb.SpotLightPositionRange[0] = DirectX::XMFLOAT4(0.0f, 3.0f, 0.0f, 8.0f);
-    cb.SpotLightDirectionCosine[0] = DirectX::XMFLOAT4(0.0f, -1.0f, 0.0f, 0.87f); // 30° cone
-    cb.SpotLightColorIntensity[0] = DirectX::XMFLOAT4(1.0f, 1.0f, 0.8f, 5.0f);
+    // Синий – правый дальний
+    cb.PointLightPositionRange[1] = DirectX::XMFLOAT4(10.0f, 5.0f, 8.0f, 100.0f);
+    cb.PointLightColorIntensity[1] = DirectX::XMFLOAT4(0.0f, 0.0f, 1.0f, 15.0f);
 
-    cb.SpotLightPositionRange[1] = DirectX::XMFLOAT4(1.5f, 2.0f, 2.0f, 6.0f);
-    cb.SpotLightDirectionCosine[1] = DirectX::XMFLOAT4(-0.3f, -0.8f, -0.5f, 0.94f); // 20° cone
-    cb.SpotLightColorIntensity[1] = DirectX::XMFLOAT4(0.2f, 0.8f, 0.2f, 4.0f);
+    // Зелёный – левый передний
+    cb.PointLightPositionRange[2] = DirectX::XMFLOAT4(-10.0f, 4.0f, 10.0f, 100.0f);
+    cb.PointLightColorIntensity[2] = DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 15.0f);
 
-    // Screen size
+    // Жёлтый – правый передний
+    cb.PointLightPositionRange[3] = DirectX::XMFLOAT4(10.0f, 4.0f, -10.0f, 100.0f);
+    cb.PointLightColorIntensity[3] = DirectX::XMFLOAT4(1.0f, 1.0f, 0.0f, 15.0f);
+
+    // Пурпурный – центр сверху
+    cb.PointLightPositionRange[4] = DirectX::XMFLOAT4(0.0f, 8.0f, 0.0f, 100.0f);
+    cb.PointLightColorIntensity[4] = DirectX::XMFLOAT4(1.0f, 0.0f, 1.0f, 20.0f); // чуть ярче
+
+    // Бирюзовый – смещённый
+    cb.PointLightPositionRange[5] = DirectX::XMFLOAT4(-5.0f, 6.0f, -3.0f, 100.0f);
+    cb.PointLightColorIntensity[5] = DirectX::XMFLOAT4(0.0f, 1.0f, 1.0f, 18.0f);
+
+    // ============================================================
+    // ПРОЖЕКТОРЫ – интенсивность уменьшена до 15-20
+    // ============================================================
+    // Слева – широкий луч
+    cb.SpotLightPositionRange[0] = DirectX::XMFLOAT4(-12.0f, 6.0f, 0.0f, 120.0f);
+    cb.SpotLightDirectionCosine[0] = DirectX::XMFLOAT4(1.0f, -0.2f, 0.0f, 0.5f);
+    cb.SpotLightColorIntensity[0] = DirectX::XMFLOAT4(1.0f, 0.3f, 0.3f, 18.0f);
+
+    // Справа
+    cb.SpotLightPositionRange[1] = DirectX::XMFLOAT4(12.0f, 6.0f, 0.0f, 120.0f);
+    cb.SpotLightDirectionCosine[1] = DirectX::XMFLOAT4(-1.0f, -0.2f, 0.0f, 0.5f);
+    cb.SpotLightColorIntensity[1] = DirectX::XMFLOAT4(0.3f, 0.3f, 1.0f, 18.0f);
+
+    // Сзади
+    cb.SpotLightPositionRange[2] = DirectX::XMFLOAT4(0.0f, 5.0f, -12.0f, 120.0f);
+    cb.SpotLightDirectionCosine[2] = DirectX::XMFLOAT4(0.0f, -0.2f, 1.0f, 0.5f);
+    cb.SpotLightColorIntensity[2] = DirectX::XMFLOAT4(1.0f, 1.0f, 0.3f, 18.0f);
+
+    // Спереди
+    cb.SpotLightPositionRange[3] = DirectX::XMFLOAT4(0.0f, 5.0f, 12.0f, 120.0f);
+    cb.SpotLightDirectionCosine[3] = DirectX::XMFLOAT4(0.0f, -0.2f, -1.0f, 0.5f);
+    cb.SpotLightColorIntensity[3] = DirectX::XMFLOAT4(0.3f, 1.0f, 0.3f, 18.0f);
+
+    // ============================================================
+    // КОЛИЧЕСТВО АКТИВНЫХ ИСТОЧНИКОВ
+    // ============================================================
+    cb.LightCounts = DirectX::XMFLOAT4(6.0f, 4.0f, 0.0f, 0.0f);
+
+    // ============================================================
+    // РАЗМЕР ЭКРАНА И МАТРИЦЫ
+    // ============================================================
     cb.ScreenSize = DirectX::XMFLOAT4(
         static_cast<float>(m_screenWidth),
         static_cast<float>(m_screenHeight),
         1.0f / static_cast<float>(m_screenWidth),
         1.0f / static_cast<float>(m_screenHeight));
 
-    // Camera matrices for world position reconstruction
-    XMVECTOR cameraPos = XMVectorSet(0.0f, 1.0f, -3.0f, 1.0f);
-    XMVECTOR targetPos = XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
+    XMVECTOR cameraPos = XMVectorSet(0.0f, 6.0f, -20.0f, 1.0f);
+    XMVECTOR targetPos = XMVectorSet(0.0f, 3.0f, 0.0f, 1.0f);
     XMVECTOR upVector = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
 
     XMMATRIX view = XMMatrixLookAtLH(cameraPos, targetPos, upVector);
     XMMATRIX proj = XMMatrixPerspectiveFovLH(
         XMConvertToRadians(60.0f),
         static_cast<float>(m_screenWidth) / static_cast<float>(m_screenHeight),
-        0.1f, 100.0f);
+        0.1f, 1000.0f);
 
     XMMATRIX invView = XMMatrixInverse(nullptr, view);
     XMMATRIX invProj = XMMatrixInverse(nullptr, proj);
@@ -831,114 +811,80 @@ void DirectXApp::UpdateLightingConstants()
     memcpy(m_deferredLightCBMappedData, &cb, sizeof(cb));
 }
 
-// Update
 void DirectXApp::Update(float deltaTime)
 {
     m_rotationAngle += 0.8f * deltaTime;
-    m_uvOffsetX += 0.2f * deltaTime;
-    m_uvOffsetY += 0.2f * deltaTime;
 
-    if (m_uvOffsetX > 1.0f) m_uvOffsetX -= 1.0f;
-    if (m_uvOffsetY > 1.0f) m_uvOffsetY -= 1.0f;
+    // Уменьшаем модель (масштабируем)
+    float scale = 0.1f; // Уменьшаем в 10 раз
+    XMMATRIX scaleMatrix = XMMatrixScaling(scale, scale, scale);
+    XMMATRIX rotationMatrix = XMMatrixRotationY(m_rotationAngle);
+    XMMATRIX worldMatrix = scaleMatrix * rotationMatrix;
 
-    XMMATRIX worldMatrix = XMMatrixRotationY(XM_PI);
-    XMVECTOR cameraPos = XMVectorSet(0.0f, 1.0f, -3.0f, 1.0f);
-    XMVECTOR targetPos = XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
+    // КАМЕРА ОЧЕНЬ ДАЛЕКО
+    XMVECTOR cameraPos = XMVectorSet(0.0f, 5.0f, -30.0f, 1.0f); // Было -8, теперь -30
+    XMVECTOR targetPos = XMVectorSet(0.0f, 2.0f, 0.0f, 1.0f);   // Смотрим в центр модели
     XMVECTOR upVector = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
     XMMATRIX viewMatrix = XMMatrixLookAtLH(cameraPos, targetPos, upVector);
 
     float aspectRatio = (m_screenHeight > 0) ?
         static_cast<float>(m_screenWidth) / m_screenHeight : 1.0f;
     XMMATRIX projMatrix = XMMatrixPerspectiveFovLH(
-        XMConvertToRadians(60.0f), aspectRatio, 0.1f, 100.0f);
+        XMConvertToRadians(60.0f), aspectRatio, 0.1f, 1000.0f); // Дальняя плоскость 1000
 
     ConstantBufferData constantData = {};
     constantData.World = XMMatrixTranspose(worldMatrix);
     constantData.View = XMMatrixTranspose(viewMatrix);
     constantData.Proj = XMMatrixTranspose(projMatrix);
-    constantData.LightPos = XMFLOAT4(2.0f, 3.0f, -2.0f, 0.0f);
+    constantData.LightPos = XMFLOAT4(2.0f, 5.0f, -2.0f, 0.0f);
     constantData.LightColor = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
-    constantData.CameraPos = XMFLOAT4(0.0f, 1.0f, -3.0f, 1.0f);
+    constantData.CameraPos = XMFLOAT4(0.0f, 5.0f, -30.0f, 1.0f);
     constantData.Tiling = XMFLOAT2(1.0f, 1.0f);
-    constantData.UVOffset = XMFLOAT2(m_uvOffsetX, m_uvOffsetY);
+    constantData.UVOffset = XMFLOAT2(0.0f, 0.0f);
 
     memcpy(m_mappedConstantData, &constantData, sizeof(constantData));
 
     UpdateLightingConstants();
 }
 
-// Deferred Rendering Methods
 void DirectXApp::RenderGeometryPass()
 {
-    D3D12_VIEWPORT viewport = {};
-    viewport.Width = static_cast<float>(m_screenWidth);
-    viewport.Height = static_cast<float>(m_screenHeight);
-    viewport.MaxDepth = 1.0f;
-
-    D3D12_RECT scissorRect = { 0, 0, m_screenWidth, m_screenHeight };
-    m_cmdList->RSSetViewports(1, &viewport);
-    m_cmdList->RSSetScissorRects(1, &scissorRect);
-
     D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_dsvHeap->GetCPUDescriptorHandleForHeapStart();
-    m_cmdList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
-    m_gbuffer->BeginGeometryPass(m_cmdList.Get(), dsvHandle);
-
-    m_cmdList->SetPipelineState(m_deferredGeometryPSO.Get());
-    m_cmdList->SetGraphicsRootSignature(m_rootSignature.Get());
-
-    ID3D12DescriptorHeap* heaps[] = { m_srvHeap.Get() };
-    m_cmdList->SetDescriptorHeaps(1, heaps);
-
-    m_cmdList->SetGraphicsRootConstantBufferView(0, m_constantBuffer->GetGPUVirtualAddress());
-    m_cmdList->SetGraphicsRootDescriptorTable(1, m_srvHeap->GetGPUDescriptorHandleForHeapStart());
-
-    m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    m_cmdList->IASetVertexBuffers(0, 1, &m_vertexBufferView);
-    m_cmdList->IASetIndexBuffer(&m_indexBufferView);
-    m_cmdList->DrawIndexedInstanced(m_indexCount, 1, 0, 0, 0);
-
-    m_gbuffer->EndGeometryPass(m_cmdList.Get());
+    m_renderingSystem->RenderGeometryPass(
+        m_cmdList.Get(),
+        m_rootSignature.Get(),
+        m_deferredGeometryPSO.Get(),
+        m_vertexBufferView,
+        m_indexBufferView,
+        m_indexCount,
+        m_srvHeap.Get(),
+        m_constantBuffer.Get(),
+        m_gbuffer.get(),
+        dsvHandle);
 }
 
-//void DirectXApp::RenderLightingPass()
-//{
-//    D3D12_VIEWPORT viewport = {};
-//    viewport.Width = static_cast<float>(m_screenWidth);
-//    viewport.Height = static_cast<float>(m_screenHeight);
-//    viewport.MaxDepth = 1.0f;
-//
-//    D3D12_RECT scissorRect = { 0, 0, m_screenWidth, m_screenHeight };
-//    m_cmdList->RSSetViewports(1, &viewport);
-//    m_cmdList->RSSetScissorRects(1, &scissorRect);
-//
-//    D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
-//    rtvHandle.ptr += m_currentBackBuffer * m_rtvDescriptorSize;
-//
-//    m_cmdList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
-//
-//    const float clearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
-//    m_cmdList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
-//
-//    m_cmdList->SetPipelineState(m_deferredLightingPSO.Get());
-//    m_cmdList->SetGraphicsRootSignature(m_deferredLightingRootSignature.Get());
-//
-//    ID3D12DescriptorHeap* heaps[] = { m_gbuffer->GetSRVHeap() };
-//    m_cmdList->SetDescriptorHeaps(1, heaps);
-//
-//    m_cmdList->SetGraphicsRootDescriptorTable(0, m_gbuffer->GetSRVGPU(GBuffer::Slot::AlbedoSpec));
-//    m_cmdList->SetGraphicsRootConstantBufferView(1, m_deferredLightConstantBuffer->GetGPUVirtualAddress());
-//
-//    m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-//    m_cmdList->DrawInstanced(3, 1, 0, 0); // Draw full-screen quad
-//}
+void DirectXApp::RenderLightingPass()
+{
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+
+    m_renderingSystem->RenderLightingPass(
+        m_cmdList.Get(),
+        m_deferredLightingRootSignature.Get(),
+        m_deferredLightingPSO.Get(),
+        m_gbuffer.get(),
+        m_deferredLightConstantBuffer.Get(),
+        rtvHandle,
+        m_screenWidth, m_screenHeight,
+        m_currentBackBuffer,
+        m_rtvDescriptorSize);
+}
 
 void DirectXApp::RenderDeferredFrame()
 {
     ThrowIfFailed(m_cmdAllocators[m_currentBackBuffer]->Reset());
     ThrowIfFailed(m_cmdList->Reset(m_cmdAllocators[m_currentBackBuffer].Get(), nullptr));
 
-    // Transition back buffer for rendering
     D3D12_RESOURCE_BARRIER barrier = {};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     barrier.Transition.pResource = m_backBuffers[m_currentBackBuffer].Get();
@@ -947,11 +893,9 @@ void DirectXApp::RenderDeferredFrame()
     barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     m_cmdList->ResourceBarrier(1, &barrier);
 
-    // Render
     RenderGeometryPass();
     RenderLightingPass();
 
-    // Transition back buffer for present
     barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
     barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
     m_cmdList->ResourceBarrier(1, &barrier);
@@ -962,7 +906,6 @@ void DirectXApp::RenderDeferredFrame()
     m_cmdQueue->ExecuteCommandLists(1, commandLists);
 }
 
-// Render
 void DirectXApp::Render()
 {
     if (m_useDeferredRendering)
@@ -987,14 +930,8 @@ void DirectXApp::BuildCommandList()
     ThrowIfFailed(m_cmdList->Reset(
         m_cmdAllocators[m_currentBackBuffer].Get(), m_pipelineState.Get()));
 
-    D3D12_VIEWPORT viewport = {};
-    viewport.Width = static_cast<float>(m_screenWidth);
-    viewport.Height = static_cast<float>(m_screenHeight);
-    viewport.MaxDepth = 1.0f;
-
-    D3D12_RECT scissorRect = { 0, 0, m_screenWidth, m_screenHeight };
-    m_cmdList->RSSetViewports(1, &viewport);
-    m_cmdList->RSSetScissorRects(1, &scissorRect);
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_dsvHeap->GetCPUDescriptorHandleForHeapStart();
 
     D3D12_RESOURCE_BARRIER barrier = {};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1004,27 +941,20 @@ void DirectXApp::BuildCommandList()
     barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     m_cmdList->ResourceBarrier(1, &barrier);
 
-    D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
-    rtvHandle.ptr += m_currentBackBuffer * m_rtvDescriptorSize;
-    D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_dsvHeap->GetCPUDescriptorHandleForHeapStart();
-
-    m_cmdList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
-
-    const float clearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
-    m_cmdList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
-    m_cmdList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
-
-    ID3D12DescriptorHeap* heaps[] = { m_srvHeap.Get() };
-    m_cmdList->SetDescriptorHeaps(1, heaps);
-    m_cmdList->SetGraphicsRootSignature(m_rootSignature.Get());
-
-    m_cmdList->SetGraphicsRootConstantBufferView(0, m_constantBuffer->GetGPUVirtualAddress());
-    m_cmdList->SetGraphicsRootDescriptorTable(1, m_srvHeap->GetGPUDescriptorHandleForHeapStart());
-
-    m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    m_cmdList->IASetVertexBuffers(0, 1, &m_vertexBufferView);
-    m_cmdList->IASetIndexBuffer(&m_indexBufferView);
-    m_cmdList->DrawIndexedInstanced(m_indexCount, 1, 0, 0, 0);
+    m_renderingSystem->RenderForward(
+        m_cmdList.Get(),
+        m_rootSignature.Get(),
+        m_pipelineState.Get(),
+        m_vertexBufferView,
+        m_indexBufferView,
+        m_indexCount,
+        m_srvHeap.Get(),
+        m_constantBuffer.Get(),
+        rtvHandle,
+        dsvHandle,
+        m_screenWidth, m_screenHeight,
+        m_currentBackBuffer,
+        m_rtvDescriptorSize);
 
     barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
     barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
@@ -1033,7 +963,6 @@ void DirectXApp::BuildCommandList()
     ThrowIfFailed(m_cmdList->Close());
 }
 
-// Resize
 void DirectXApp::Resize(int newWidth, int newHeight)
 {
     if (newWidth <= 0 || newHeight <= 0) return;
@@ -1060,7 +989,6 @@ void DirectXApp::Resize(int newWidth, int newHeight)
     CreateRenderTargets();
     CreateDepthBuffer();
 
-    // Recreate GBuffer with new size
     if (m_gbuffer)
     {
         m_gbuffer->Shutdown();
@@ -1068,7 +996,6 @@ void DirectXApp::Resize(int newWidth, int newHeight)
     }
 }
 
-// Synchronization Methods
 void DirectXApp::FlushCommandQueue()
 {
     ThrowIfFailed(m_cmdQueue->Signal(m_fence.Get(), m_fenceValues[m_currentBackBuffer]));
@@ -1091,7 +1018,6 @@ void DirectXApp::MoveToNextFrame()
     m_fenceValues[m_currentBackBuffer] = currentFence + 1;
 }
 
-// Command Queue
 void DirectXApp::CreateCommandQueue()
 {
     D3D12_COMMAND_QUEUE_DESC queueDesc = {};
@@ -1121,6 +1047,8 @@ bool DirectXApp::Initialize()
             return false;
         }
 
+        m_renderingSystem = std::make_unique<RenderingSystem>();  // СОЗДАЕМ СИСТЕМУ РЕНДЕРИНГА
+
         CreateDeferredRootSignatures();
         CreateLightingConstantBuffer();
         CreatePipelineState();
@@ -1129,7 +1057,6 @@ bool DirectXApp::Initialize()
         ThrowIfFailed(m_cmdAllocators[0]->Reset());
         ThrowIfFailed(m_cmdList->Reset(m_cmdAllocators[0].Get(), nullptr));
 
-        // Load model and textures
         {
             wchar_t exePath[MAX_PATH] = {};
             GetModuleFileNameW(nullptr, exePath, MAX_PATH);

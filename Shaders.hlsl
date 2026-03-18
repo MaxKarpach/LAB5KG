@@ -8,7 +8,7 @@ cbuffer PerObjectCB : register(b0)
     float4x4 View;
     float4x4 Proj;
     float4 LightPos;
-    float4 DiffuseLightColor; // Переименовано с LightColor
+    float4 DiffuseLightColor;
     float4 CameraPos;
     float2 Tiling;
     float2 UVOffset;
@@ -16,8 +16,8 @@ cbuffer PerObjectCB : register(b0)
 
 cbuffer DeferredLightCB : register(b1)
 {
-    float4 DirectionalLightDirection; // Переименовано с LightDirection
-    float4 DirectionalLightColor; // Переименовано с LightColor
+    float4 DirectionalLightDirection;
+    float4 DirectionalLightColor;
     float4 AmbientColor;
     float4 LightCounts;
     
@@ -35,8 +35,7 @@ cbuffer DeferredLightCB : register(b1)
 // TEXTURES AND SAMPLERS
 // ============================================================
 
-Texture2D gTextureFirst : register(t0);
-Texture2D gTextureSecond : register(t1);
+Texture2D gMainTexture : register(t0); // ОДНА текстура
 SamplerState gSampler : register(s0);
 
 Texture2D<float4> GAlbedoSpec : register(t0);
@@ -77,7 +76,7 @@ ForwardPSInput ForwardVSMain(VSInput input)
     output.WorldPos = worldPos.xyz;
     output.Normal = normalize(mul(float4(input.Normal, 0.0f), World).xyz);
     output.Color = input.Color;
-    output.TexCoord = input.TexCoord;
+    output.TexCoord = input.TexCoord; // БЕЗ UVOffset
     
     return output;
 }
@@ -91,28 +90,19 @@ float4 ForwardPSMain(ForwardPSInput input) : SV_TARGET
     
     // Ambient
     float ambientStrength = 0.2f;
-    float3 ambient = ambientStrength * DiffuseLightColor.rgb; // Исправлено
+    float3 ambient = ambientStrength * DiffuseLightColor.rgb;
     
     // Diffuse
     float diff = max(dot(N, L), 0.0f);
-    float3 diffuse = diff * DiffuseLightColor.rgb; // Исправлено
+    float3 diffuse = diff * DiffuseLightColor.rgb;
     
     // Specular
     float shininess = 32.0f;
     float spec = pow(max(dot(V, R), 0.0f), shininess);
-    float3 specular = 0.3f * spec * DiffuseLightColor.rgb; // Исправлено
+    float3 specular = 0.3f * spec * DiffuseLightColor.rgb;
     
-    float cellsPerSide = 6.0f;
-    float2 animatedUV = input.TexCoord + UVOffset * 0.5f;
-    float2 cellIndex = floor(animatedUV * cellsPerSide);
-    float2 cellUV = frac(animatedUV * cellsPerSide);
-    float isEven = fmod(cellIndex.x + cellIndex.y, 2.0f);
-    
-    float4 texColor;
-    if (isEven < 0.5f)
-        texColor = gTextureFirst.Sample(gSampler, cellUV);
-    else
-        texColor = gTextureSecond.Sample(gSampler, cellUV);
+    // ОДНА текстура, БЕЗ анимации
+    float4 texColor = gMainTexture.Sample(gSampler, input.TexCoord);
     
     float3 lighting = ambient + diffuse + specular;
     float3 result = lighting * texColor.rgb;
@@ -153,7 +143,7 @@ GeometryPSInput GeometryVSMain(VSInput input)
     
     float3x3 W3 = (float3x3) World;
     o.NormalW = normalize(mul(W3, input.Normal));
-    o.UV = input.TexCoord;
+    o.UV = input.TexCoord; // БЕЗ UVOffset
     
     return o;
 }
@@ -162,18 +152,8 @@ GBufferOutput GeometryPSMain(GeometryPSInput input)
 {
     GBufferOutput o;
     
-    float2 uv = input.UV;
-    float cellsPerSide = 6.0f;
-    float2 animatedUV = uv + UVOffset * 0.5f;
-    float2 cellIndex = floor(animatedUV * cellsPerSide);
-    float2 cellUV = frac(animatedUV * cellsPerSide);
-    float isEven = fmod(cellIndex.x + cellIndex.y, 2.0f);
-    
-    float4 albedo;
-    if (isEven < 0.5f)
-        albedo = gTextureFirst.Sample(gSampler, cellUV);
-    else
-        albedo = gTextureSecond.Sample(gSampler, cellUV);
+    // ОДНА текстура, БЕЗ анимации
+    float4 albedo = gMainTexture.Sample(gSampler, input.UV);
     
     float3 normal = normalize(input.NormalW);
     float depth = saturate(input.ViewDepth / 100.0f);
@@ -211,13 +191,6 @@ float4 LightPSMain(LightPassInput input) : SV_TARGET
     float3 worldPos = GWorldPos.Load(int3(pixelPos, 0)).xyz;
     float3 normalEncoded = GNormal.Load(int3(pixelPos, 0)).xyz;
     float depth = GDepth.Load(int3(pixelPos, 0)).x;
-    
-    // Для отладки - показываем нормали как цвета
-    // Если вы видите цветную голову (синий слева, оранжевый справа) - значит текстуры читаются правильно
-    // return float4(normalEncoded, 1.0f);
-    
-    // Или показываем world position как цвета
-    // return float4(worldPos * 0.5f + 0.5f, 1.0f);
     
     if (depth >= 1.0f)
         return float4(0.0f, 0.0f, 0.0f, 1.0f);

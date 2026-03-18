@@ -16,6 +16,7 @@
 #include "TextureLoader.h"
 #include "ObjLoader.h"
 #include "GBuffer.h"
+#include "RenderingSystem.h"  // ТОЛЬКО ЭТОТ ИНКЛЮД ДОБАВЛЕН
 
 using Microsoft::WRL::ComPtr;
 
@@ -80,8 +81,8 @@ private:
     // Deferred lighting constants structure
     struct DeferredLightCB
     {
-        DirectX::XMFLOAT4 DirectionalLightDirection;    // Переименовано
-        DirectX::XMFLOAT4 DirectionalLightColor;        // Переименовано
+        DirectX::XMFLOAT4 DirectionalLightDirection;
+        DirectX::XMFLOAT4 DirectionalLightColor;
         DirectX::XMFLOAT4 AmbientColor;
         DirectX::XMFLOAT4 LightCounts;
         DirectX::XMFLOAT4 PointLightPositionRange[6];
@@ -126,9 +127,9 @@ private:
     // Pipeline
     ComPtr<ID3D12RootSignature>       m_rootSignature;
     ComPtr<ID3D12RootSignature>       m_deferredLightingRootSignature;
-    ComPtr<ID3D12PipelineState>       m_pipelineState;          // Forward rendering PSO
-    ComPtr<ID3D12PipelineState>       m_deferredGeometryPSO;    // Geometry pass PSO
-    ComPtr<ID3D12PipelineState>       m_deferredLightingPSO;    // Lighting pass PSO
+    ComPtr<ID3D12PipelineState>       m_pipelineState;
+    ComPtr<ID3D12PipelineState>       m_deferredGeometryPSO;
+    ComPtr<ID3D12PipelineState>       m_deferredLightingPSO;
 
     // Geometry
     ComPtr<ID3D12Resource>            m_vertexBuffer;
@@ -144,14 +145,17 @@ private:
     ComPtr<ID3D12Resource>            m_textureSecondUpload;
 
     // Constant buffers
-    ComPtr<ID3D12Resource>            m_constantBuffer;         // Forward rendering CB
+    ComPtr<ID3D12Resource>            m_constantBuffer;
     ConstantBufferData* m_mappedConstantData = nullptr;
 
-    ComPtr<ID3D12Resource>            m_deferredLightConstantBuffer; // Lighting CB
+    ComPtr<ID3D12Resource>            m_deferredLightConstantBuffer;
     uint8_t* m_deferredLightCBMappedData = nullptr;
 
     // GBuffer
     std::unique_ptr<GBuffer>          m_gbuffer;
+
+    // Rendering System - ДОБАВЛЕНО
+    std::unique_ptr<RenderingSystem>  m_renderingSystem;
 
     // Fence
     ComPtr<ID3D12Fence>               m_fence;
