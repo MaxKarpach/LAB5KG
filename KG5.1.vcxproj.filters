@@ -39,6 +39,9 @@
     <ClCompile Include="RenderingSystem.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
+    <ClCompile Include="Camera.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="InputDevice.h">
@@ -66,6 +69,9 @@
       <Filter>Исходные файлы</Filter>
     </ClInclude>
     <ClInclude Include="RenderingSystem.h">
+      <Filter>Исходные файлы</Filter>
+    </ClInclude>
+    <ClInclude Include="Camera.h">
       <Filter>Исходные файлы</Filter>
     </ClInclude>
   </ItemGroup>

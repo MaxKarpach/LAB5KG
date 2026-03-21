@@ -13,7 +13,7 @@ void RenderingSystem::RenderGeometryPass(
     D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle)
 {
     D3D12_VIEWPORT viewport = {};
-    viewport.Width = 800; // Эти значения должны передаваться параметрами
+    viewport.Width = 800;
     viewport.Height = 600;
     viewport.MaxDepth = 1.0f;
 

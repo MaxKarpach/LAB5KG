@@ -4,13 +4,19 @@
 #include <memory>
 
 // Constructor / Destructor
-DirectXApp::DirectXApp(HWND windowHandle, int windowWidth, int windowHeight)
+DirectXApp::DirectXApp(HWND windowHandle, int windowWidth, int windowHeight, const InputDevice* inputDevice)
     : m_windowHandle(windowHandle)
     , m_screenWidth(windowWidth)
     , m_screenHeight(windowHeight)
+    , m_inputDevice(inputDevice)
 {
     for (UINT i = 0; i < BACK_BUFFER_COUNT; ++i)
         m_fenceValues[i] = 0;
+
+    // Настраиваем камеру
+    m_camera.SetPosition(DirectX::XMFLOAT3(0.0f, 5.0f, -15.0f));
+    m_camera.SetSpeed(15.0f);
+    m_camera.SetRotationSpeed(60.0f);  // 60 градусов в секунду
 }
 
 DirectXApp::~DirectXApp()
@@ -718,129 +724,100 @@ void DirectXApp::UpdateLightingConstants()
 
     DeferredLightCB cb = {};
 
-    // ============================================================
-    // НАПРАВЛЕННЫЙ СВЕТ – очень слабый
-    // ============================================================
     cb.DirectionalLightDirection = DirectX::XMFLOAT4(-0.5f, -1.0f, -0.3f, 0.0f);
-    cb.DirectionalLightColor = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 0.1f); // ещё слабее
+    cb.DirectionalLightColor = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 0.1f);
+    cb.AmbientColor = DirectX::XMFLOAT4(0.05f, 0.05f, 0.05f, 1.0f);
 
-    // ============================================================
-    // ФОНОВОЕ ОСВЕЩЕНИЕ – минимальное
-    // ============================================================
-    cb.AmbientColor = DirectX::XMFLOAT4(0.05f, 0.05f, 0.05f, 1.0f); // темнее
-
-    // ============================================================
-    // ТОЧЕЧНЫЕ ИСТОЧНИКИ – интенсивность уменьшена до 15-20
-    // ============================================================
-    // Красный – левый дальний
+    // Point lights
     cb.PointLightPositionRange[0] = DirectX::XMFLOAT4(-10.0f, 5.0f, -8.0f, 100.0f);
     cb.PointLightColorIntensity[0] = DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 15.0f);
 
-    // Синий – правый дальний
     cb.PointLightPositionRange[1] = DirectX::XMFLOAT4(10.0f, 5.0f, 8.0f, 100.0f);
     cb.PointLightColorIntensity[1] = DirectX::XMFLOAT4(0.0f, 0.0f, 1.0f, 15.0f);
 
-    // Зелёный – левый передний
     cb.PointLightPositionRange[2] = DirectX::XMFLOAT4(-10.0f, 4.0f, 10.0f, 100.0f);
     cb.PointLightColorIntensity[2] = DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 15.0f);
 
-    // Жёлтый – правый передний
     cb.PointLightPositionRange[3] = DirectX::XMFLOAT4(10.0f, 4.0f, -10.0f, 100.0f);
     cb.PointLightColorIntensity[3] = DirectX::XMFLOAT4(1.0f, 1.0f, 0.0f, 15.0f);
 
-    // Пурпурный – центр сверху
     cb.PointLightPositionRange[4] = DirectX::XMFLOAT4(0.0f, 8.0f, 0.0f, 100.0f);
-    cb.PointLightColorIntensity[4] = DirectX::XMFLOAT4(1.0f, 0.0f, 1.0f, 20.0f); // чуть ярче
+    cb.PointLightColorIntensity[4] = DirectX::XMFLOAT4(1.0f, 0.0f, 1.0f, 20.0f);
 
-    // Бирюзовый – смещённый
     cb.PointLightPositionRange[5] = DirectX::XMFLOAT4(-5.0f, 6.0f, -3.0f, 100.0f);
     cb.PointLightColorIntensity[5] = DirectX::XMFLOAT4(0.0f, 1.0f, 1.0f, 18.0f);
 
-    // ============================================================
-    // ПРОЖЕКТОРЫ – интенсивность уменьшена до 15-20
-    // ============================================================
-    // Слева – широкий луч
+    // Spot lights
     cb.SpotLightPositionRange[0] = DirectX::XMFLOAT4(-12.0f, 6.0f, 0.0f, 120.0f);
     cb.SpotLightDirectionCosine[0] = DirectX::XMFLOAT4(1.0f, -0.2f, 0.0f, 0.5f);
     cb.SpotLightColorIntensity[0] = DirectX::XMFLOAT4(1.0f, 0.3f, 0.3f, 18.0f);
 
-    // Справа
     cb.SpotLightPositionRange[1] = DirectX::XMFLOAT4(12.0f, 6.0f, 0.0f, 120.0f);
     cb.SpotLightDirectionCosine[1] = DirectX::XMFLOAT4(-1.0f, -0.2f, 0.0f, 0.5f);
     cb.SpotLightColorIntensity[1] = DirectX::XMFLOAT4(0.3f, 0.3f, 1.0f, 18.0f);
 
-    // Сзади
     cb.SpotLightPositionRange[2] = DirectX::XMFLOAT4(0.0f, 5.0f, -12.0f, 120.0f);
     cb.SpotLightDirectionCosine[2] = DirectX::XMFLOAT4(0.0f, -0.2f, 1.0f, 0.5f);
     cb.SpotLightColorIntensity[2] = DirectX::XMFLOAT4(1.0f, 1.0f, 0.3f, 18.0f);
 
-    // Спереди
     cb.SpotLightPositionRange[3] = DirectX::XMFLOAT4(0.0f, 5.0f, 12.0f, 120.0f);
     cb.SpotLightDirectionCosine[3] = DirectX::XMFLOAT4(0.0f, -0.2f, -1.0f, 0.5f);
     cb.SpotLightColorIntensity[3] = DirectX::XMFLOAT4(0.3f, 1.0f, 0.3f, 18.0f);
 
-    // ============================================================
-    // КОЛИЧЕСТВО АКТИВНЫХ ИСТОЧНИКОВ
-    // ============================================================
     cb.LightCounts = DirectX::XMFLOAT4(6.0f, 4.0f, 0.0f, 0.0f);
 
-    // ============================================================
-    // РАЗМЕР ЭКРАНА И МАТРИЦЫ
-    // ============================================================
     cb.ScreenSize = DirectX::XMFLOAT4(
         static_cast<float>(m_screenWidth),
         static_cast<float>(m_screenHeight),
         1.0f / static_cast<float>(m_screenWidth),
         1.0f / static_cast<float>(m_screenHeight));
 
-    XMVECTOR cameraPos = XMVectorSet(0.0f, 6.0f, -20.0f, 1.0f);
-    XMVECTOR targetPos = XMVectorSet(0.0f, 3.0f, 0.0f, 1.0f);
-    XMVECTOR upVector = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+    // Use camera for inverse matrices
+    float aspectRatio = (m_screenHeight > 0) ?
+        static_cast<float>(m_screenWidth) / m_screenHeight : 1.0f;
 
-    XMMATRIX view = XMMatrixLookAtLH(cameraPos, targetPos, upVector);
-    XMMATRIX proj = XMMatrixPerspectiveFovLH(
-        XMConvertToRadians(60.0f),
-        static_cast<float>(m_screenWidth) / static_cast<float>(m_screenHeight),
-        0.1f, 1000.0f);
+    DirectX::XMMATRIX view = m_camera.GetViewMatrix();
+    DirectX::XMMATRIX proj = m_camera.GetProjectionMatrix(aspectRatio);
 
-    XMMATRIX invView = XMMatrixInverse(nullptr, view);
-    XMMATRIX invProj = XMMatrixInverse(nullptr, proj);
-    XMStoreFloat4x4(&cb.InvView, XMMatrixTranspose(invView));
-    XMStoreFloat4x4(&cb.InvProj, XMMatrixTranspose(invProj));
+    DirectX::XMMATRIX invView = DirectX::XMMatrixInverse(nullptr, view);
+    DirectX::XMMATRIX invProj = DirectX::XMMatrixInverse(nullptr, proj);
+    DirectX::XMStoreFloat4x4(&cb.InvView, DirectX::XMMatrixTranspose(invView));
+    DirectX::XMStoreFloat4x4(&cb.InvProj, DirectX::XMMatrixTranspose(invProj));
 
     memcpy(m_deferredLightCBMappedData, &cb, sizeof(cb));
 }
 
 void DirectXApp::Update(float deltaTime)
 {
-    m_rotationAngle += 0.8f * deltaTime;
+    // Обновляем камеру с клавиатурой
+    if (m_inputDevice)
+        m_camera.Update(deltaTime, *m_inputDevice);
 
-    // Уменьшаем модель (масштабируем)
-    float scale = 0.1f; // Уменьшаем в 10 раз
-    XMMATRIX scaleMatrix = XMMatrixScaling(scale, scale, scale);
-    XMMATRIX rotationMatrix = XMMatrixRotationY(m_rotationAngle);
-    XMMATRIX worldMatrix = scaleMatrix * rotationMatrix;
+    // Модель НЕ вращается
+    float scale = 0.1f;
+    DirectX::XMMATRIX scaleMatrix = DirectX::XMMatrixScaling(scale, scale, scale);
+    DirectX::XMMATRIX rotationMatrix = DirectX::XMMatrixRotationY(0.0f);  // Без вращения
+    DirectX::XMMATRIX worldMatrix = scaleMatrix * rotationMatrix;
 
-    // КАМЕРА ОЧЕНЬ ДАЛЕКО
-    XMVECTOR cameraPos = XMVectorSet(0.0f, 5.0f, -30.0f, 1.0f); // Было -8, теперь -30
-    XMVECTOR targetPos = XMVectorSet(0.0f, 2.0f, 0.0f, 1.0f);   // Смотрим в центр модели
-    XMVECTOR upVector = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
-    XMMATRIX viewMatrix = XMMatrixLookAtLH(cameraPos, targetPos, upVector);
-
+    // Получаем матрицы камеры
     float aspectRatio = (m_screenHeight > 0) ?
         static_cast<float>(m_screenWidth) / m_screenHeight : 1.0f;
-    XMMATRIX projMatrix = XMMatrixPerspectiveFovLH(
-        XMConvertToRadians(60.0f), aspectRatio, 0.1f, 1000.0f); // Дальняя плоскость 1000
+
+    DirectX::XMMATRIX viewMatrix = m_camera.GetViewMatrix();
+    DirectX::XMMATRIX projMatrix = m_camera.GetProjectionMatrix(aspectRatio);
+
+    // Позиция камеры для освещения
+    DirectX::XMFLOAT3 cameraPos = m_camera.GetPosition();
 
     ConstantBufferData constantData = {};
-    constantData.World = XMMatrixTranspose(worldMatrix);
-    constantData.View = XMMatrixTranspose(viewMatrix);
-    constantData.Proj = XMMatrixTranspose(projMatrix);
-    constantData.LightPos = XMFLOAT4(2.0f, 5.0f, -2.0f, 0.0f);
-    constantData.LightColor = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
-    constantData.CameraPos = XMFLOAT4(0.0f, 5.0f, -30.0f, 1.0f);
-    constantData.Tiling = XMFLOAT2(1.0f, 1.0f);
-    constantData.UVOffset = XMFLOAT2(0.0f, 0.0f);
+    constantData.World = DirectX::XMMatrixTranspose(worldMatrix);
+    constantData.View = DirectX::XMMatrixTranspose(viewMatrix);
+    constantData.Proj = DirectX::XMMatrixTranspose(projMatrix);
+    constantData.LightPos = DirectX::XMFLOAT4(2.0f, 5.0f, -2.0f, 0.0f);
+    constantData.LightColor = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+    constantData.CameraPos = DirectX::XMFLOAT4(cameraPos.x, cameraPos.y, cameraPos.z, 1.0f);
+    constantData.Tiling = DirectX::XMFLOAT2(1.0f, 1.0f);
+    constantData.UVOffset = DirectX::XMFLOAT2(0.0f, 0.0f);
 
     memcpy(m_mappedConstantData, &constantData, sizeof(constantData));
 
@@ -1047,7 +1024,7 @@ bool DirectXApp::Initialize()
             return false;
         }
 
-        m_renderingSystem = std::make_unique<RenderingSystem>();  // СОЗДАЕМ СИСТЕМУ РЕНДЕРИНГА
+        m_renderingSystem = std::make_unique<RenderingSystem>();
 
         CreateDeferredRootSignatures();
         CreateLightingConstantBuffer();

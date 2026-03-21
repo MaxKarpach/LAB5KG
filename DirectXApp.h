@@ -16,7 +16,9 @@
 #include "TextureLoader.h"
 #include "ObjLoader.h"
 #include "GBuffer.h"
-#include "RenderingSystem.h"  // ТОЛЬКО ЭТОТ ИНКЛЮД ДОБАВЛЕН
+#include "RenderingSystem.h"
+#include "Camera.h"
+#include "InputDevice.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -25,7 +27,7 @@ static const UINT BACK_BUFFER_COUNT = 2;
 class DirectXApp
 {
 public:
-    DirectXApp(HWND windowHandle, int windowWidth, int windowHeight);
+    DirectXApp(HWND windowHandle, int windowWidth, int windowHeight, const InputDevice* inputDevice);
     ~DirectXApp();
 
     bool Initialize();
@@ -100,6 +102,12 @@ private:
     int  m_screenWidth;
     int  m_screenHeight;
 
+    // Input device (for camera control)
+    const InputDevice* m_inputDevice;
+
+    // Camera
+    Camera m_camera;
+
     // Animation
     float m_rotationAngle = 0.0f;
     float m_uvOffsetX = 0.0f;
@@ -154,7 +162,7 @@ private:
     // GBuffer
     std::unique_ptr<GBuffer>          m_gbuffer;
 
-    // Rendering System - ДОБАВЛЕНО
+    // Rendering System
     std::unique_ptr<RenderingSystem>  m_renderingSystem;
 
     // Fence

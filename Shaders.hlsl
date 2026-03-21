@@ -35,7 +35,7 @@ cbuffer DeferredLightCB : register(b1)
 // TEXTURES AND SAMPLERS
 // ============================================================
 
-Texture2D gMainTexture : register(t0); // ОДНА текстура
+Texture2D gMainTexture : register(t0); 
 SamplerState gSampler : register(s0);
 
 Texture2D<float4> GAlbedoSpec : register(t0);
@@ -152,7 +152,6 @@ GBufferOutput GeometryPSMain(GeometryPSInput input)
 {
     GBufferOutput o;
     
-    // ОДНА текстура, БЕЗ анимации
     float4 albedo = gMainTexture.Sample(gSampler, input.UV);
     
     float3 normal = normalize(input.NormalW);
