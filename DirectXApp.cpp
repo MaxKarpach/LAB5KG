@@ -717,6 +717,8 @@ void DirectXApp::CreateLightingConstantBuffer()
         reinterpret_cast<void**>(&m_deferredLightCBMappedData)));
 }
 
+
+// DirectXApp.cpp - обновить UpdateLightingConstants:
 void DirectXApp::UpdateLightingConstants()
 {
     if (!m_deferredLightCBMappedData)
@@ -724,55 +726,65 @@ void DirectXApp::UpdateLightingConstants()
 
     DeferredLightCB cb = {};
 
+    // Directional light
     cb.DirectionalLightDirection = DirectX::XMFLOAT4(-0.5f, -1.0f, -0.3f, 0.0f);
-    cb.DirectionalLightColor = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 0.1f);
-    cb.AmbientColor = DirectX::XMFLOAT4(0.05f, 0.05f, 0.05f, 1.0f);
+    cb.DirectionalLightColor = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 0.5f);
+    cb.AmbientColor = DirectX::XMFLOAT4(0.15f, 0.15f, 0.2f, 1.0f);
 
-    // Point lights
+    // Static point lights (6 штук)
     cb.PointLightPositionRange[0] = DirectX::XMFLOAT4(-10.0f, 5.0f, -8.0f, 100.0f);
-    cb.PointLightColorIntensity[0] = DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 15.0f);
+    cb.PointLightColorIntensity[0] = DirectX::XMFLOAT4(1.0f, 0.2f, 0.2f, 8.0f);
 
     cb.PointLightPositionRange[1] = DirectX::XMFLOAT4(10.0f, 5.0f, 8.0f, 100.0f);
-    cb.PointLightColorIntensity[1] = DirectX::XMFLOAT4(0.0f, 0.0f, 1.0f, 15.0f);
+    cb.PointLightColorIntensity[1] = DirectX::XMFLOAT4(0.2f, 0.2f, 1.0f, 8.0f);
 
     cb.PointLightPositionRange[2] = DirectX::XMFLOAT4(-10.0f, 4.0f, 10.0f, 100.0f);
-    cb.PointLightColorIntensity[2] = DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 15.0f);
+    cb.PointLightColorIntensity[2] = DirectX::XMFLOAT4(0.2f, 1.0f, 0.2f, 8.0f);
 
     cb.PointLightPositionRange[3] = DirectX::XMFLOAT4(10.0f, 4.0f, -10.0f, 100.0f);
-    cb.PointLightColorIntensity[3] = DirectX::XMFLOAT4(1.0f, 1.0f, 0.0f, 15.0f);
+    cb.PointLightColorIntensity[3] = DirectX::XMFLOAT4(1.0f, 1.0f, 0.2f, 8.0f);
 
     cb.PointLightPositionRange[4] = DirectX::XMFLOAT4(0.0f, 8.0f, 0.0f, 100.0f);
-    cb.PointLightColorIntensity[4] = DirectX::XMFLOAT4(1.0f, 0.0f, 1.0f, 20.0f);
+    cb.PointLightColorIntensity[4] = DirectX::XMFLOAT4(1.0f, 0.2f, 1.0f, 10.0f);
 
     cb.PointLightPositionRange[5] = DirectX::XMFLOAT4(-5.0f, 6.0f, -3.0f, 100.0f);
-    cb.PointLightColorIntensity[5] = DirectX::XMFLOAT4(0.0f, 1.0f, 1.0f, 18.0f);
+    cb.PointLightColorIntensity[5] = DirectX::XMFLOAT4(0.2f, 1.0f, 1.0f, 8.0f);
 
-    // Spot lights
-    cb.SpotLightPositionRange[0] = DirectX::XMFLOAT4(-12.0f, 6.0f, 0.0f, 120.0f);
-    cb.SpotLightDirectionCosine[0] = DirectX::XMFLOAT4(1.0f, -0.2f, 0.0f, 0.5f);
-    cb.SpotLightColorIntensity[0] = DirectX::XMFLOAT4(1.0f, 0.3f, 0.3f, 18.0f);
+    // Dynamic lights (от выстрелов)
+    int dynamicCount = min((int)m_dynamicLights.size(), 26);
 
-    cb.SpotLightPositionRange[1] = DirectX::XMFLOAT4(12.0f, 6.0f, 0.0f, 120.0f);
-    cb.SpotLightDirectionCosine[1] = DirectX::XMFLOAT4(-1.0f, -0.2f, 0.0f, 0.5f);
-    cb.SpotLightColorIntensity[1] = DirectX::XMFLOAT4(0.3f, 0.3f, 1.0f, 18.0f);
+    for (int i = 0; i < dynamicCount; ++i)
+    {
+        cb.PointLightPositionRange[6 + i] = DirectX::XMFLOAT4(
+            m_dynamicLights[i].Position.x,
+            m_dynamicLights[i].Position.y,
+            m_dynamicLights[i].Position.z,
+            m_dynamicLights[i].Range
+        );
+        cb.PointLightColorIntensity[6 + i] = DirectX::XMFLOAT4(
+            m_dynamicLights[i].Color.x,
+            m_dynamicLights[i].Color.y,
+            m_dynamicLights[i].Color.z,
+            m_dynamicLights[i].Intensity
+        );
+    }
 
-    cb.SpotLightPositionRange[2] = DirectX::XMFLOAT4(0.0f, 5.0f, -12.0f, 120.0f);
-    cb.SpotLightDirectionCosine[2] = DirectX::XMFLOAT4(0.0f, -0.2f, 1.0f, 0.5f);
-    cb.SpotLightColorIntensity[2] = DirectX::XMFLOAT4(1.0f, 1.0f, 0.3f, 18.0f);
-
-    cb.SpotLightPositionRange[3] = DirectX::XMFLOAT4(0.0f, 5.0f, 12.0f, 120.0f);
-    cb.SpotLightDirectionCosine[3] = DirectX::XMFLOAT4(0.0f, -0.2f, -1.0f, 0.5f);
-    cb.SpotLightColorIntensity[3] = DirectX::XMFLOAT4(0.3f, 1.0f, 0.3f, 18.0f);
-
-    cb.LightCounts = DirectX::XMFLOAT4(6.0f, 4.0f, 0.0f, 0.0f);
+    // Light counts
+    cb.LightCounts = DirectX::XMFLOAT4(
+        6.0f,          
+        0.0f,         
+        (float)dynamicCount, 
+        0.0f
+    );
 
     cb.ScreenSize = DirectX::XMFLOAT4(
         static_cast<float>(m_screenWidth),
         static_cast<float>(m_screenHeight),
         1.0f / static_cast<float>(m_screenWidth),
-        1.0f / static_cast<float>(m_screenHeight));
+        1.0f / static_cast<float>(m_screenHeight)
+    );
 
-    // Use camera for inverse matrices
+    // Camera matrices
     float aspectRatio = (m_screenHeight > 0) ?
         static_cast<float>(m_screenWidth) / m_screenHeight : 1.0f;
 
@@ -789,14 +801,28 @@ void DirectXApp::UpdateLightingConstants()
 
 void DirectXApp::Update(float deltaTime)
 {
-    // Обновляем камеру с клавиатурой
+    // Обновляем камеру
     if (m_inputDevice)
         m_camera.Update(deltaTime, *m_inputDevice);
 
-    // Модель НЕ вращается
+    // Кулдаун
+    if (m_shootCooldown > 0.0f)
+    {
+        m_shootCooldown -= deltaTime;
+    }
+
+    // Стрельба по пробелу
+    if (m_inputDevice && m_inputDevice->IsKeyDown(VK_SPACE) && m_shootCooldown <= 0.0f)
+    {
+        Shoot();
+        m_shootCooldown = SHOOT_COOLDOWN_TIME;
+    }
+
+
+    // Модель не вращается
     float scale = 0.1f;
     DirectX::XMMATRIX scaleMatrix = DirectX::XMMatrixScaling(scale, scale, scale);
-    DirectX::XMMATRIX rotationMatrix = DirectX::XMMatrixRotationY(0.0f);  // Без вращения
+    DirectX::XMMATRIX rotationMatrix = DirectX::XMMatrixRotationY(0.0f);
     DirectX::XMMATRIX worldMatrix = scaleMatrix * rotationMatrix;
 
     // Получаем матрицы камеры
@@ -1118,4 +1144,75 @@ void DirectXApp::CreateD3DDevice()
             return;
     }
     ThrowIfFailed(E_FAIL, "No compatible graphics device found");
+}
+
+void DirectXApp::Shoot()
+{
+    if (!m_inputDevice)
+        return;
+
+    if (m_shootCooldown > 0.0f)
+        return;
+
+    m_shootCooldown = SHOOT_COOLDOWN_TIME;
+
+    DirectX::XMFLOAT3 origin = m_camera.GetPosition();
+    DirectX::XMFLOAT3 direction = m_camera.GetLookDirection();
+
+    float len = sqrt(direction.x * direction.x + direction.y * direction.y + direction.z * direction.z);
+    if (len > 0.0001f)
+    {
+        direction.x /= len;
+        direction.y /= len;
+        direction.z /= len;
+    }
+
+    float shootDistance = 15.0f;
+
+    DirectX::XMFLOAT3 hitPoint;
+    hitPoint.x = origin.x + direction.x * shootDistance;
+    hitPoint.y = origin.y + direction.y * shootDistance;
+    hitPoint.z = origin.z + direction.z * shootDistance;
+
+    DynamicLight light1;
+    light1.Position = hitPoint;
+    light1.Intensity = 120.0f;
+    light1.Range = 12.0f;
+    light1.Active = true;
+    light1.Color = DirectX::XMFLOAT3(1.0f, 0.4f, 0.1f);
+    m_dynamicLights.push_back(light1);
+
+    DirectX::XMFLOAT3 point2;
+    point2.x = origin.x + direction.x * (shootDistance - 2.0f);
+    point2.y = origin.y + direction.y * (shootDistance - 2.0f);
+    point2.z = origin.z + direction.z * (shootDistance - 2.0f);
+
+    DynamicLight light2;
+    light2.Position = point2;
+    light2.Intensity = 80.0f;
+    light2.Range = 8.0f;
+    light2.Active = true;
+    light2.Color = DirectX::XMFLOAT3(1.0f, 0.6f, 0.2f);
+    m_dynamicLights.push_back(light2);
+
+    float maxDist = 30.0f;
+    DirectX::XMFLOAT3 point3;
+    point3.x = origin.x + direction.x * maxDist;
+    point3.y = origin.y + direction.y * maxDist;
+    point3.z = origin.z + direction.z * maxDist;
+
+    DynamicLight light3;
+    light3.Position = point3;
+    light3.Intensity = 150.0f;
+    light3.Range = 15.0f;
+    light3.Active = true;
+    light3.Color = DirectX::XMFLOAT3(1.0f, 0.2f, 0.2f);
+    m_dynamicLights.push_back(light3);
+
+    while (m_dynamicLights.size() > MAX_DYNAMIC_LIGHTS)
+        m_dynamicLights.erase(m_dynamicLights.begin());
+
+    UpdateLightingConstants();
+
+    Beep(1000, 50);
 }

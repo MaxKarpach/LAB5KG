@@ -1,6 +1,4 @@
-// ============================================================
-// CONSTANT BUFFERS
-// ============================================================
+// shaders.hlsl - полная версия
 
 cbuffer PerObjectCB : register(b0)
 {
@@ -21,8 +19,8 @@ cbuffer DeferredLightCB : register(b1)
     float4 AmbientColor;
     float4 LightCounts;
     
-    float4 PointLightPositionRange[6];
-    float4 PointLightColorIntensity[6];
+    float4 PointLightPositionRange[32];
+    float4 PointLightColorIntensity[32];
     float4 SpotLightPositionRange[4];
     float4 SpotLightDirectionCosine[4];
     float4 SpotLightColorIntensity[4];
@@ -31,21 +29,13 @@ cbuffer DeferredLightCB : register(b1)
     float4x4 InvProj;
 };
 
-// ============================================================
-// TEXTURES AND SAMPLERS
-// ============================================================
-
-Texture2D gMainTexture : register(t0); 
+Texture2D gMainTexture : register(t0);
 SamplerState gSampler : register(s0);
 
 Texture2D<float4> GAlbedoSpec : register(t0);
 Texture2D<float4> GWorldPos : register(t1);
 Texture2D<float4> GNormal : register(t2);
 Texture2D<float4> GDepth : register(t3);
-
-// ============================================================
-// FORWARD RENDERING SHADERS
-// ============================================================
 
 struct VSInput
 {
@@ -76,7 +66,7 @@ ForwardPSInput ForwardVSMain(VSInput input)
     output.WorldPos = worldPos.xyz;
     output.Normal = normalize(mul(float4(input.Normal, 0.0f), World).xyz);
     output.Color = input.Color;
-    output.TexCoord = input.TexCoord; // БЕЗ UVOffset
+    output.TexCoord = input.TexCoord;
     
     return output;
 }
@@ -88,20 +78,16 @@ float4 ForwardPSMain(ForwardPSInput input) : SV_TARGET
     float3 V = normalize(CameraPos.xyz - input.WorldPos);
     float3 R = reflect(-L, N);
     
-    // Ambient
     float ambientStrength = 0.2f;
     float3 ambient = ambientStrength * DiffuseLightColor.rgb;
     
-    // Diffuse
     float diff = max(dot(N, L), 0.0f);
     float3 diffuse = diff * DiffuseLightColor.rgb;
     
-    // Specular
     float shininess = 32.0f;
     float spec = pow(max(dot(V, R), 0.0f), shininess);
     float3 specular = 0.3f * spec * DiffuseLightColor.rgb;
     
-    // ОДНА текстура, БЕЗ анимации
     float4 texColor = gMainTexture.Sample(gSampler, input.TexCoord);
     
     float3 lighting = ambient + diffuse + specular;
@@ -109,10 +95,6 @@ float4 ForwardPSMain(ForwardPSInput input) : SV_TARGET
     
     return float4(result, 1.0f);
 }
-
-// ============================================================
-// DEFERRED GEOMETRY PASS SHADERS
-// ============================================================
 
 struct GeometryPSInput
 {
@@ -143,7 +125,7 @@ GeometryPSInput GeometryVSMain(VSInput input)
     
     float3x3 W3 = (float3x3) World;
     o.NormalW = normalize(mul(W3, input.Normal));
-    o.UV = input.TexCoord; // БЕЗ UVOffset
+    o.UV = input.TexCoord;
     
     return o;
 }
@@ -164,10 +146,6 @@ GBufferOutput GeometryPSMain(GeometryPSInput input)
     
     return o;
 }
-
-// ============================================================
-// DEFERRED LIGHTING PASS SHADERS
-// ============================================================
 
 struct LightPassInput
 {
@@ -195,18 +173,16 @@ float4 LightPSMain(LightPassInput input) : SV_TARGET
         return float4(0.0f, 0.0f, 0.0f, 1.0f);
     
     float3 normal = normalize(normalEncoded * 2.0f - 1.0f);
-    float3 ambient = AmbientColor.rgb * albedo.rgb;
-    float3 lit = ambient;
+    float3 lit = AmbientColor.rgb * albedo.rgb;
     
     // Directional light
     float3 directionalL = normalize(-DirectionalLightDirection.xyz);
     float directionalNdotL = saturate(dot(normal, directionalL));
     lit += DirectionalLightColor.rgb * directionalNdotL * albedo.rgb * DirectionalLightColor.a;
     
-    // Point lights
-    int pointCount = (int) LightCounts.x;
-    [loop]
-    for (int i = 0; i < pointCount; ++i)
+    // Static point lights
+    int staticPointCount = 6;
+    for (int i = 0; i < staticPointCount; ++i)
     {
         float3 toLight = PointLightPositionRange[i].xyz - worldPos;
         float dist = length(toLight);
@@ -220,9 +196,24 @@ float4 LightPSMain(LightPassInput input) : SV_TARGET
         lit += PointLightColorIntensity[i].rgb * ndotl * attenuation * intensity * albedo.rgb;
     }
     
+    int dynamicCount = (int) LightCounts.z;
+    for (int i = 0; i < dynamicCount; ++i)
+    {
+        int idx = staticPointCount + i;
+        float3 toLight = PointLightPositionRange[idx].xyz - worldPos;
+        float dist = length(toLight);
+        float range = max(PointLightPositionRange[idx].w, 0.0001f);
+        float falloff = saturate(1.0f - dist / range);
+        float attenuation = falloff * falloff;
+        
+        float3 L = toLight / max(dist, 0.0001f);
+        float ndotl = saturate(dot(normal, L));
+        float intensity = PointLightColorIntensity[idx].a;
+        lit += PointLightColorIntensity[idx].rgb * ndotl * attenuation * intensity * albedo.rgb;
+    }
+    
     // Spot lights
     int spotCount = (int) LightCounts.y;
-    [loop]
     for (int i = 0; i < spotCount; ++i)
     {
         float3 toLight = SpotLightPositionRange[i].xyz - worldPos;

@@ -34,8 +34,19 @@ public:
     void Update(float deltaTime);
     void Render();
     void Resize(int newWidth, int newHeight);
+    // В public секцию
+    float ReadDepthAtPixel(float screenX, float screenY);
+    DirectX::XMFLOAT3 ScreenToWorld(float screenX, float screenY, float depth);
 
 private:
+    // DirectXApp.h - добавить в private секцию:
+
+    // ----- Shooting system -----
+    void Shoot();
+    std::vector<DynamicLight> m_dynamicLights;
+    float m_shootCooldown = 0.0f;
+    static constexpr float SHOOT_COOLDOWN_TIME = 0.2f;
+    static const int MAX_DYNAMIC_LIGHTS = 200;
     // ----- Setup methods -----
     void CreateD3DDevice();
     void CreateCommandQueue();
@@ -80,15 +91,16 @@ private:
         const std::string& entryPoint,
         const std::string& shaderModel);
 
-    // Deferred lighting constants structure
+    // DirectXApp.h - обновить структуру DeferredLightCB:
+
     struct DeferredLightCB
     {
         DirectX::XMFLOAT4 DirectionalLightDirection;
         DirectX::XMFLOAT4 DirectionalLightColor;
         DirectX::XMFLOAT4 AmbientColor;
-        DirectX::XMFLOAT4 LightCounts;
-        DirectX::XMFLOAT4 PointLightPositionRange[6];
-        DirectX::XMFLOAT4 PointLightColorIntensity[6];
+        DirectX::XMFLOAT4 LightCounts;  // x=static point, y=spot, z=dynamic, w=reserved
+        DirectX::XMFLOAT4 PointLightPositionRange[32];
+        DirectX::XMFLOAT4 PointLightColorIntensity[32];
         DirectX::XMFLOAT4 SpotLightPositionRange[4];
         DirectX::XMFLOAT4 SpotLightDirectionCosine[4];
         DirectX::XMFLOAT4 SpotLightColorIntensity[4];

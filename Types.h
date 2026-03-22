@@ -30,3 +30,15 @@ struct GBufferData
     XMFLOAT4 Normal;       // normal
     XMFLOAT4 WorldPos;     // world position
 };
+
+
+struct DynamicLight
+{
+    DirectX::XMFLOAT3 Position;
+    DirectX::XMFLOAT3 Color;
+    float Intensity;
+    float Range;
+    bool Active;
+};
+
+const int MAX_DYNAMIC_LIGHTS = 256;

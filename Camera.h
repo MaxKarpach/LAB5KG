@@ -1,4 +1,3 @@
-// Camera.h
 #pragma once
 #include <DirectXMath.h>
 #include <Windows.h>
@@ -26,6 +25,7 @@ public:
     void SetPosition(const XMFLOAT3& pos) { position_ = pos; }
     void SetSpeed(float speed) { speed_ = speed; }
     void SetRotationSpeed(float speed) { rotationSpeed_ = speed; }
+    DirectX::XMFLOAT3 GetLookDirection() const { return forward_; }
 
 private:
     void UpdateVectors();
