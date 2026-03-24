@@ -15,6 +15,8 @@ using Microsoft::WRL::ComPtr;
 class RenderingSystem
 {
 public:
+    bool IsWireframe() const { return m_wireframe; }  // Добавьте этот метод
+    void SetWireframe(bool on) { m_wireframe = on; }   // Уже
     void RenderGeometryPass(
         ID3D12GraphicsCommandList* cmdList,
         ID3D12RootSignature* rootSig,
@@ -50,4 +52,6 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle,
         int screenWidth, int screenHeight,
         UINT backBufferIndex, UINT rtvDescriptorSize);
+private:
+    bool m_wireframe = false;  // Добавьте этот член, если его нет
 };

@@ -58,10 +58,9 @@ void DirectXApp::CreateDescriptorHeaps()
         ThrowIfFailed(m_d3dDevice->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_dsvHeap)));
     }
 
-    // SRV heap 
     {
         D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-        heapDesc.NumDescriptors = 2;
+        heapDesc.NumDescriptors = 4;  // Было 2, стало 4
         heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         ThrowIfFailed(m_d3dDevice->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_srvHeap)));
@@ -305,6 +304,10 @@ void DirectXApp::CreatePipelineState()
           D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40,
           D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 48,
+          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "BINORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 60,
+          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
     };
 
     D3D12_RASTERIZER_DESC rasterizerDesc = {};
@@ -355,6 +358,10 @@ void DirectXApp::CreateDeferredPipelines()
         { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24,
           D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40,
+          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 48,
+          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "BINORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 60,
           D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
     };
 
@@ -478,40 +485,75 @@ void DirectXApp::BuildMeshBuffers(const std::vector<Vertex>& vertices,
     m_indexBufferView.SizeInBytes = static_cast<UINT>(indexBufferSize);
     m_indexBufferView.Format = DXGI_FORMAT_R32_UINT;
 }
-
 std::vector<Vertex> DirectXApp::GenerateCubeMesh()
 {
     float halfSize = 0.5f;
+
+    // Функция для вычисления tangent и binormal для грани
+    auto calculateTangents = [](const XMFLOAT3& normal) -> std::pair<XMFLOAT3, XMFLOAT3> {
+        XMFLOAT3 tangent, binormal;
+
+        // Для каждой грани выбираем tangent на основе нормали
+        if (fabs(normal.x) > 0.9f) // X-нормаль (лево/право)
+        {
+            tangent = XMFLOAT3(0.0f, 0.0f, 1.0f);
+            binormal = XMFLOAT3(0.0f, 1.0f, 0.0f);
+        }
+        else if (fabs(normal.y) > 0.9f) // Y-нормаль (верх/низ)
+        {
+            tangent = XMFLOAT3(1.0f, 0.0f, 0.0f);
+            binormal = XMFLOAT3(0.0f, 0.0f, 1.0f);
+        }
+        else // Z-нормаль (перед/зад)
+        {
+            tangent = XMFLOAT3(1.0f, 0.0f, 0.0f);
+            binormal = XMFLOAT3(0.0f, 1.0f, 0.0f);
+        }
+
+        return { tangent, binormal };
+        };
+
     Vertex vertexData[] =
     {
-        { {-halfSize,-halfSize, halfSize}, {0,0,1}, {0.9f,0.2f,0.2f,1}, {0,1} },
-        { { halfSize,-halfSize, halfSize}, {0,0,1}, {0.9f,0.2f,0.2f,1}, {1,1} },
-        { { halfSize, halfSize, halfSize}, {0,0,1}, {0.9f,0.2f,0.2f,1}, {1,0} },
-        { {-halfSize, halfSize, halfSize}, {0,0,1}, {0.9f,0.2f,0.2f,1}, {0,0} },
-        { { halfSize,-halfSize,-halfSize}, {0,0,-1}, {0.2f,0.8f,0.2f,1}, {0,1} },
-        { {-halfSize,-halfSize,-halfSize}, {0,0,-1}, {0.2f,0.8f,0.2f,1}, {1,1} },
-        { {-halfSize, halfSize,-halfSize}, {0,0,-1}, {0.2f,0.8f,0.2f,1}, {1,0} },
-        { { halfSize, halfSize,-halfSize}, {0,0,-1}, {0.2f,0.8f,0.2f,1}, {0,0} },
-        { {-halfSize,-halfSize,-halfSize}, {-1,0,0}, {0.2f,0.2f,0.9f,1}, {0,1} },
-        { {-halfSize,-halfSize, halfSize}, {-1,0,0}, {0.2f,0.2f,0.9f,1}, {1,1} },
-        { {-halfSize, halfSize, halfSize}, {-1,0,0}, {0.2f,0.2f,0.9f,1}, {1,0} },
-        { {-halfSize, halfSize,-halfSize}, {-1,0,0}, {0.2f,0.2f,0.9f,1}, {0,0} },
-        { { halfSize,-halfSize, halfSize}, {1,0,0}, {0.9f,0.9f,0.1f,1}, {0,1} },
-        { { halfSize,-halfSize,-halfSize}, {1,0,0}, {0.9f,0.9f,0.1f,1}, {1,1} },
-        { { halfSize, halfSize,-halfSize}, {1,0,0}, {0.9f,0.9f,0.1f,1}, {1,0} },
-        { { halfSize, halfSize, halfSize}, {1,0,0}, {0.9f,0.9f,0.1f,1}, {0,0} },
-        { {-halfSize, halfSize, halfSize}, {0,1,0}, {0.1f,0.9f,0.9f,1}, {0,1} },
-        { { halfSize, halfSize, halfSize}, {0,1,0}, {0.1f,0.9f,0.9f,1}, {1,1} },
-        { { halfSize, halfSize,-halfSize}, {0,1,0}, {0.1f,0.9f,0.9f,1}, {1,0} },
-        { {-halfSize, halfSize,-halfSize}, {0,1,0}, {0.1f,0.9f,0.9f,1}, {0,0} },
-        { {-halfSize,-halfSize,-halfSize}, {0,-1,0}, {0.9f,0.1f,0.9f,1}, {0,1} },
-        { { halfSize,-halfSize,-halfSize}, {0,-1,0}, {0.9f,0.1f,0.9f,1}, {1,1} },
-        { { halfSize,-halfSize, halfSize}, {0,-1,0}, {0.9f,0.1f,0.9f,1}, {1,0} },
-        { {-halfSize,-halfSize, halfSize}, {0,-1,0}, {0.9f,0.1f,0.9f,1}, {0,0} },
+        // Front face (Z = halfSize)
+        { {-halfSize,-halfSize, halfSize}, {0,0,1}, {0.9f,0.2f,0.2f,1}, {0,1}, {1,0,0}, {0,1,0} },
+        { { halfSize,-halfSize, halfSize}, {0,0,1}, {0.9f,0.2f,0.2f,1}, {1,1}, {1,0,0}, {0,1,0} },
+        { { halfSize, halfSize, halfSize}, {0,0,1}, {0.9f,0.2f,0.2f,1}, {1,0}, {1,0,0}, {0,1,0} },
+        { {-halfSize, halfSize, halfSize}, {0,0,1}, {0.9f,0.2f,0.2f,1}, {0,0}, {1,0,0}, {0,1,0} },
+
+        // Back face (Z = -halfSize)
+        { { halfSize,-halfSize,-halfSize}, {0,0,-1}, {0.2f,0.8f,0.2f,1}, {0,1}, {-1,0,0}, {0,1,0} },
+        { {-halfSize,-halfSize,-halfSize}, {0,0,-1}, {0.2f,0.8f,0.2f,1}, {1,1}, {-1,0,0}, {0,1,0} },
+        { {-halfSize, halfSize,-halfSize}, {0,0,-1}, {0.2f,0.8f,0.2f,1}, {1,0}, {-1,0,0}, {0,1,0} },
+        { { halfSize, halfSize,-halfSize}, {0,0,-1}, {0.2f,0.8f,0.2f,1}, {0,0}, {-1,0,0}, {0,1,0} },
+
+        // Left face (X = -halfSize)
+        { {-halfSize,-halfSize,-halfSize}, {-1,0,0}, {0.2f,0.2f,0.9f,1}, {0,1}, {0,0,1}, {0,1,0} },
+        { {-halfSize,-halfSize, halfSize}, {-1,0,0}, {0.2f,0.2f,0.9f,1}, {1,1}, {0,0,1}, {0,1,0} },
+        { {-halfSize, halfSize, halfSize}, {-1,0,0}, {0.2f,0.2f,0.9f,1}, {1,0}, {0,0,1}, {0,1,0} },
+        { {-halfSize, halfSize,-halfSize}, {-1,0,0}, {0.2f,0.2f,0.9f,1}, {0,0}, {0,0,1}, {0,1,0} },
+
+        // Right face (X = halfSize)
+        { { halfSize,-halfSize, halfSize}, {1,0,0}, {0.9f,0.9f,0.1f,1}, {0,1}, {0,0,-1}, {0,1,0} },
+        { { halfSize,-halfSize,-halfSize}, {1,0,0}, {0.9f,0.9f,0.1f,1}, {1,1}, {0,0,-1}, {0,1,0} },
+        { { halfSize, halfSize,-halfSize}, {1,0,0}, {0.9f,0.9f,0.1f,1}, {1,0}, {0,0,-1}, {0,1,0} },
+        { { halfSize, halfSize, halfSize}, {1,0,0}, {0.9f,0.9f,0.1f,1}, {0,0}, {0,0,-1}, {0,1,0} },
+
+        // Top face (Y = halfSize)
+        { {-halfSize, halfSize, halfSize}, {0,1,0}, {0.1f,0.9f,0.9f,1}, {0,1}, {1,0,0}, {0,0,-1} },
+        { { halfSize, halfSize, halfSize}, {0,1,0}, {0.1f,0.9f,0.9f,1}, {1,1}, {1,0,0}, {0,0,-1} },
+        { { halfSize, halfSize,-halfSize}, {0,1,0}, {0.1f,0.9f,0.9f,1}, {1,0}, {1,0,0}, {0,0,-1} },
+        { {-halfSize, halfSize,-halfSize}, {0,1,0}, {0.1f,0.9f,0.9f,1}, {0,0}, {1,0,0}, {0,0,-1} },
+
+        // Bottom face (Y = -halfSize)
+        { {-halfSize,-halfSize,-halfSize}, {0,-1,0}, {0.9f,0.1f,0.9f,1}, {0,1}, {1,0,0}, {0,0,1} },
+        { { halfSize,-halfSize,-halfSize}, {0,-1,0}, {0.9f,0.1f,0.9f,1}, {1,1}, {1,0,0}, {0,0,1} },
+        { { halfSize,-halfSize, halfSize}, {0,-1,0}, {0.9f,0.1f,0.9f,1}, {1,0}, {1,0,0}, {0,0,1} },
+        { {-halfSize,-halfSize, halfSize}, {0,-1,0}, {0.9f,0.1f,0.9f,1}, {0,0}, {1,0,0}, {0,0,1} },
     };
+
     return std::vector<Vertex>(vertexData, vertexData + _countof(vertexData));
 }
-
 std::vector<UINT> DirectXApp::GenerateCubeIndices()
 {
     std::vector<UINT> indices;
@@ -546,13 +588,41 @@ void DirectXApp::ImportModel(const std::wstring& modelPath)
     BuildMeshBuffers(model.vertices, model.indices);
 }
 
-void DirectXApp::UploadTexture(const TextureData& texData, int textureSlot)
+void DirectXApp::UploadTexture(const TextureData& texData, int textureSlot, bool isNormalMap)
 {
     if (!texData.valid || texData.width == 0 || texData.height == 0)
         ThrowIfFailed(E_INVALIDARG, "Invalid texture data provided");
 
-    ComPtr<ID3D12Resource>& targetTexture = (textureSlot == 0) ? m_textureFirst : m_textureSecond;
-    ComPtr<ID3D12Resource>& uploadBuffer = (textureSlot == 0) ? m_textureFirstUpload : m_textureSecondUpload;
+    ComPtr<ID3D12Resource>* targetTexture = nullptr;
+    ComPtr<ID3D12Resource>* uploadBuffer = nullptr;
+
+    // Выбираем правильный слот
+    if (textureSlot == 0)
+    {
+        targetTexture = &m_textureFirst;
+        uploadBuffer = &m_textureFirstUpload;
+    }
+    else if (textureSlot == 1)
+    {
+        targetTexture = &m_textureSecond;
+        uploadBuffer = &m_textureSecondUpload;
+    }
+    else if (textureSlot == 2)
+    {
+        targetTexture = &m_normalTexture;
+        uploadBuffer = &m_normalTextureUpload;
+    }
+    else // slot 3
+    {
+        targetTexture = &m_displacementTexture;
+        uploadBuffer = &m_displacementTextureUpload;
+    }
+
+    if (!targetTexture || !uploadBuffer)
+    {
+        ThrowIfFailed(E_INVALIDARG, "Invalid texture slot");
+        return;
+    }
 
     D3D12_HEAP_PROPERTIES defaultHeapProps = {};
     defaultHeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -565,18 +635,26 @@ void DirectXApp::UploadTexture(const TextureData& texData, int textureSlot)
     textureDesc.MipLevels = 1;
     textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     textureDesc.SampleDesc = { 1, 0 };
+    textureDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
 
+    // Создаем текстуру в памяти GPU
     ThrowIfFailed(m_d3dDevice->CreateCommittedResource(
-        &defaultHeapProps, D3D12_HEAP_FLAG_NONE,
-        &textureDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-        IID_PPV_ARGS(&targetTexture)));
+        &defaultHeapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &textureDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr,
+        IID_PPV_ARGS(targetTexture->GetAddressOf())));  // Изменено!
 
+    // Получаем информацию о размере для копирования
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
     UINT numRows = 0;
     UINT64 rowPitch = 0, totalBytes = 0;
     m_d3dDevice->GetCopyableFootprints(
         &textureDesc, 0, 1, 0, &footprint, &numRows, &rowPitch, &totalBytes);
 
+    // Создаем буфер для загрузки
     D3D12_HEAP_PROPERTIES uploadHeapProps = {};
     uploadHeapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
 
@@ -590,12 +668,16 @@ void DirectXApp::UploadTexture(const TextureData& texData, int textureSlot)
     uploadDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
     ThrowIfFailed(m_d3dDevice->CreateCommittedResource(
-        &uploadHeapProps, D3D12_HEAP_FLAG_NONE,
-        &uploadDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-        IID_PPV_ARGS(&uploadBuffer)));
+        &uploadHeapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &uploadDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(uploadBuffer->GetAddressOf())));  // Изменено!
 
+    // Копируем данные в буфер
     uint8_t* mappedMemory = nullptr;
-    uploadBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mappedMemory));
+    (*uploadBuffer)->Map(0, nullptr, reinterpret_cast<void**>(&mappedMemory));
     UINT sourceRowPitch = texData.width * 4;
     for (UINT row = 0; row < texData.height; ++row)
     {
@@ -603,41 +685,46 @@ void DirectXApp::UploadTexture(const TextureData& texData, int textureSlot)
             texData.pixels.data() + (UINT64)sourceRowPitch * row,
             sourceRowPitch);
     }
-    uploadBuffer->Unmap(0, nullptr);
+    (*uploadBuffer)->Unmap(0, nullptr);
 
+    // Копируем текстуру из буфера в GPU память
     D3D12_TEXTURE_COPY_LOCATION sourceLocation = {};
-    sourceLocation.pResource = uploadBuffer.Get();
+    sourceLocation.pResource = uploadBuffer->Get();
     sourceLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
     sourceLocation.PlacedFootprint = footprint;
 
     D3D12_TEXTURE_COPY_LOCATION destLocation = {};
-    destLocation.pResource = targetTexture.Get();
+    destLocation.pResource = targetTexture->Get();
     destLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
     destLocation.SubresourceIndex = 0;
 
     m_cmdList->CopyTextureRegion(&destLocation, 0, 0, 0, &sourceLocation, nullptr);
 
+    // Переводим текстуру в состояние для чтения шейдером
     D3D12_RESOURCE_BARRIER transitionBarrier = {};
     transitionBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    transitionBarrier.Transition.pResource = targetTexture.Get();
+    transitionBarrier.Transition.pResource = targetTexture->Get();
     transitionBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
     transitionBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     transitionBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     m_cmdList->ResourceBarrier(1, &transitionBarrier);
 
+    // Создаем SRV для текстуры
     UINT srvDescriptorSize = m_d3dDevice->GetDescriptorHandleIncrementSize(
         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
     D3D12_CPU_DESCRIPTOR_HANDLE srvHandle =
         m_srvHeap->GetCPUDescriptorHandleForHeapStart();
-    srvHandle.ptr += textureSlot * srvDescriptorSize;
+
+    int srvOffset = textureSlot;
+    srvHandle.ptr += srvOffset * srvDescriptorSize;
 
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Texture2D.MipLevels = 1;
-    m_d3dDevice->CreateShaderResourceView(targetTexture.Get(), &srvDesc, srvHandle);
+    m_d3dDevice->CreateShaderResourceView(targetTexture->Get(), &srvDesc, srvHandle);
 }
 
 void DirectXApp::CreateSwapChain()
@@ -771,9 +858,9 @@ void DirectXApp::UpdateLightingConstants()
 
     // Light counts
     cb.LightCounts = DirectX::XMFLOAT4(
-        6.0f,          
-        0.0f,         
-        (float)dynamicCount, 
+        6.0f,
+        0.0f,
+        (float)dynamicCount,
         0.0f
     );
 
@@ -854,10 +941,13 @@ void DirectXApp::RenderGeometryPass()
 {
     D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_dsvHeap->GetCPUDescriptorHandleForHeapStart();
 
+    // Устанавливаем топологию для тесселяции
+    m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
+
     m_renderingSystem->RenderGeometryPass(
         m_cmdList.Get(),
         m_rootSignature.Get(),
-        m_deferredGeometryPSO.Get(),
+        m_tessGeometryPSO.Get(),        // ← используем PSO с тесселяцией
         m_vertexBufferView,
         m_indexBufferView,
         m_indexCount,
@@ -930,8 +1020,10 @@ void DirectXApp::Render()
 void DirectXApp::BuildCommandList()
 {
     ThrowIfFailed(m_cmdAllocators[m_currentBackBuffer]->Reset());
+
+    // ИСПОЛЬЗУЕМ PSO ТЕССЕЛЯЦИИ ВМЕСТО ОБЫЧНОГО
     ThrowIfFailed(m_cmdList->Reset(
-        m_cmdAllocators[m_currentBackBuffer].Get(), m_pipelineState.Get()));
+        m_cmdAllocators[m_currentBackBuffer].Get(), m_tessPipeline.Get()));  // <-- ИЗМЕНЕНО
 
     D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
     D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_dsvHeap->GetCPUDescriptorHandleForHeapStart();
@@ -944,10 +1036,13 @@ void DirectXApp::BuildCommandList()
     barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     m_cmdList->ResourceBarrier(1, &barrier);
 
+    // УСТАНАВЛИВАЕМ ПРАВИЛЬНУЮ ТОПОЛОГИЮ ДЛЯ ТЕССЕЛЯЦИИ
+    m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);  // <-- ДОБАВЛЕНО
+
     m_renderingSystem->RenderForward(
         m_cmdList.Get(),
         m_rootSignature.Get(),
-        m_pipelineState.Get(),
+        m_tessPipeline.Get(),  // <-- ИСПОЛЬЗУЕМ PSO ТЕССЕЛЯЦИИ
         m_vertexBufferView,
         m_indexBufferView,
         m_indexCount,
@@ -1057,6 +1152,10 @@ bool DirectXApp::Initialize()
         CreatePipelineState();
         CreateDeferredPipelines();
 
+        CreateTessellationPipeline();  // <-- СОЗДАЁМ PS
+        CreateTessellationGeometryPipeline();
+
+
         ThrowIfFailed(m_cmdAllocators[0]->Reset());
         ThrowIfFailed(m_cmdList->Reset(m_cmdAllocators[0].Get(), nullptr));
 
@@ -1095,6 +1194,38 @@ bool DirectXApp::Initialize()
                 return false;
             }
             UploadTexture(texData2, 1);
+
+            // В методе Initialize, после загрузки основных текстур, добавьте:
+
+// Загрузка карты нормалей
+            TextureData normalData = LoadTextureWIC(workingDir + L"normal.png");
+            if (!normalData.valid)
+                normalData = LoadTextureWIC(workingDir + L"normal.jpg");
+            if (normalData.valid)
+            {
+                UploadTexture(normalData, 2, true); // slot 2 для карты нормалей
+                m_useNormalMap = true;
+            }
+            else
+            {
+                MessageBoxA(m_windowHandle, "Missing normal map file! Using flat lighting.", "Warning", MB_OK | MB_ICONWARNING);
+                m_useNormalMap = false;
+            }
+
+            // Загрузка карты смещения (displacement)
+            TextureData displacementData = LoadTextureWIC(workingDir + L"displacement.png");
+            if (!displacementData.valid)
+                displacementData = LoadTextureWIC(workingDir + L"displacement.jpg");
+            if (displacementData.valid)
+            {
+                UploadTexture(displacementData, 3, false); // slot 3 для карты смещения
+                m_useDisplacement = true;
+            }
+            else
+            {
+                MessageBoxA(m_windowHandle, "Missing displacement map file!", "Warning", MB_OK | MB_ICONWARNING);
+                m_useDisplacement = false;
+            }
         }
 
         ThrowIfFailed(m_cmdList->Close());
@@ -1215,4 +1346,180 @@ void DirectXApp::Shoot()
     UpdateLightingConstants();
 
     Beep(1000, 50);
+}
+
+void DirectXApp::CreateTessellationPipeline()
+{
+    wchar_t exePath[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    std::wstring filePath(exePath);
+    filePath = filePath.substr(0, filePath.find_last_of(L"\\/") + 1) + L"shaders.hlsl";
+
+    auto vs = CompileShaderFile(filePath, "VS", "vs_5_0");
+    auto hs = CompileShaderFile(filePath, "HS", "hs_5_0");
+    auto ds = CompileShaderFile(filePath, "DS", "ds_5_0");
+    auto ps = CompileShaderFile(filePath, "PS", "ps_5_0");
+
+    D3D12_INPUT_ELEMENT_DESC layout[] =
+    {
+        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 48, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"BINORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 60, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+    };
+
+    // Обычный RASTERIZER_DESC (не CD3DX12)
+    D3D12_RASTERIZER_DESC rasterizerDesc = {};
+    rasterizerDesc.FillMode = D3D12_FILL_MODE_SOLID;
+    rasterizerDesc.CullMode = D3D12_CULL_MODE_BACK;
+    rasterizerDesc.FrontCounterClockwise = FALSE;
+    rasterizerDesc.DepthBias = 0;
+    rasterizerDesc.DepthBiasClamp = 0.0f;
+    rasterizerDesc.SlopeScaledDepthBias = 0.0f;
+    rasterizerDesc.DepthClipEnable = TRUE;
+    rasterizerDesc.MultisampleEnable = FALSE;
+    rasterizerDesc.AntialiasedLineEnable = FALSE;
+    rasterizerDesc.ForcedSampleCount = 0;
+    rasterizerDesc.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
+
+    // Обычный BLEND_DESC
+    D3D12_BLEND_DESC blendDesc = {};
+    blendDesc.AlphaToCoverageEnable = FALSE;
+    blendDesc.IndependentBlendEnable = FALSE;
+    for (UINT i = 0; i < 8; ++i)
+    {
+        blendDesc.RenderTarget[i].BlendEnable = FALSE;
+        blendDesc.RenderTarget[i].LogicOpEnable = FALSE;
+        blendDesc.RenderTarget[i].SrcBlend = D3D12_BLEND_ONE;
+        blendDesc.RenderTarget[i].DestBlend = D3D12_BLEND_ZERO;
+        blendDesc.RenderTarget[i].BlendOp = D3D12_BLEND_OP_ADD;
+        blendDesc.RenderTarget[i].SrcBlendAlpha = D3D12_BLEND_ONE;
+        blendDesc.RenderTarget[i].DestBlendAlpha = D3D12_BLEND_ZERO;
+        blendDesc.RenderTarget[i].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        blendDesc.RenderTarget[i].LogicOp = D3D12_LOGIC_OP_NOOP;
+        blendDesc.RenderTarget[i].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    }
+
+    // Обычный DEPTH_STENCIL_DESC
+    D3D12_DEPTH_STENCIL_DESC depthStencilDesc = {};
+    depthStencilDesc.DepthEnable = TRUE;
+    depthStencilDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    depthStencilDesc.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+    depthStencilDesc.StencilEnable = FALSE;
+    depthStencilDesc.StencilReadMask = D3D12_DEFAULT_STENCIL_READ_MASK;
+    depthStencilDesc.StencilWriteMask = D3D12_DEFAULT_STENCIL_WRITE_MASK;
+    depthStencilDesc.FrontFace.StencilFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+    depthStencilDesc.FrontFace.StencilPassOp = D3D12_STENCIL_OP_KEEP;
+    depthStencilDesc.FrontFace.StencilFailOp = D3D12_STENCIL_OP_KEEP;
+    depthStencilDesc.FrontFace.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
+    depthStencilDesc.BackFace = depthStencilDesc.FrontFace;
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+    psoDesc.InputLayout = { layout, _countof(layout) };
+    psoDesc.pRootSignature = m_rootSignature.Get();
+    psoDesc.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
+    psoDesc.HS = { hs->GetBufferPointer(), hs->GetBufferSize() };
+    psoDesc.DS = { ds->GetBufferPointer(), ds->GetBufferSize() };
+    psoDesc.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
+    psoDesc.RasterizerState = rasterizerDesc;
+    psoDesc.BlendState = blendDesc;
+    psoDesc.DepthStencilState = depthStencilDesc;
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH;
+    psoDesc.NumRenderTargets = 1;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+    psoDesc.SampleDesc = { 1, 0 };
+
+    ThrowIfFailed(m_d3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_tessPipeline)));
+}
+
+void DirectXApp::CreateTessellationGeometryPipeline()
+{
+    wchar_t exePath[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    std::wstring filePath(exePath);
+    filePath = filePath.substr(0, filePath.find_last_of(L"\\/") + 1) + L"shaders.hlsl";
+
+    auto vs = CompileShaderFile(filePath, "TessVS", "vs_5_0");
+    auto hs = CompileShaderFile(filePath, "TessHS", "hs_5_0");
+    auto ds = CompileShaderFile(filePath, "TessDS", "ds_5_0");
+    auto ps = CompileShaderFile(filePath, "TessGeometryPSMain", "ps_5_0");
+
+    D3D12_INPUT_ELEMENT_DESC layout[] =
+    {
+        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 48, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"BINORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 60, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+    };
+
+    D3D12_RASTERIZER_DESC rasterizerDesc = {};
+    rasterizerDesc.FillMode = D3D12_FILL_MODE_SOLID;
+    rasterizerDesc.CullMode = D3D12_CULL_MODE_BACK;
+    rasterizerDesc.FrontCounterClockwise = FALSE;
+    rasterizerDesc.DepthBias = 0;
+    rasterizerDesc.DepthBiasClamp = 0.0f;
+    rasterizerDesc.SlopeScaledDepthBias = 0.0f;
+    rasterizerDesc.DepthClipEnable = TRUE;
+    rasterizerDesc.MultisampleEnable = FALSE;
+    rasterizerDesc.AntialiasedLineEnable = FALSE;
+    rasterizerDesc.ForcedSampleCount = 0;
+    rasterizerDesc.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
+
+    D3D12_BLEND_DESC blendDesc = {};
+    blendDesc.AlphaToCoverageEnable = FALSE;
+    blendDesc.IndependentBlendEnable = FALSE;
+    for (UINT i = 0; i < 8; ++i)
+    {
+        blendDesc.RenderTarget[i].BlendEnable = FALSE;
+        blendDesc.RenderTarget[i].LogicOpEnable = FALSE;
+        blendDesc.RenderTarget[i].SrcBlend = D3D12_BLEND_ONE;
+        blendDesc.RenderTarget[i].DestBlend = D3D12_BLEND_ZERO;
+        blendDesc.RenderTarget[i].BlendOp = D3D12_BLEND_OP_ADD;
+        blendDesc.RenderTarget[i].SrcBlendAlpha = D3D12_BLEND_ONE;
+        blendDesc.RenderTarget[i].DestBlendAlpha = D3D12_BLEND_ZERO;
+        blendDesc.RenderTarget[i].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        blendDesc.RenderTarget[i].LogicOp = D3D12_LOGIC_OP_NOOP;
+        blendDesc.RenderTarget[i].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    }
+
+    D3D12_DEPTH_STENCIL_DESC depthStencilDesc = {};
+    depthStencilDesc.DepthEnable = TRUE;
+    depthStencilDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    depthStencilDesc.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+    depthStencilDesc.StencilEnable = FALSE;
+    depthStencilDesc.StencilReadMask = D3D12_DEFAULT_STENCIL_READ_MASK;
+    depthStencilDesc.StencilWriteMask = D3D12_DEFAULT_STENCIL_WRITE_MASK;
+    depthStencilDesc.FrontFace.StencilFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+    depthStencilDesc.FrontFace.StencilPassOp = D3D12_STENCIL_OP_KEEP;
+    depthStencilDesc.FrontFace.StencilFailOp = D3D12_STENCIL_OP_KEEP;
+    depthStencilDesc.FrontFace.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
+    depthStencilDesc.BackFace = depthStencilDesc.FrontFace;
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+    psoDesc.InputLayout = { layout, _countof(layout) };
+    psoDesc.pRootSignature = m_rootSignature.Get();
+    psoDesc.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
+    psoDesc.HS = { hs->GetBufferPointer(), hs->GetBufferSize() };
+    psoDesc.DS = { ds->GetBufferPointer(), ds->GetBufferSize() };
+    psoDesc.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
+    psoDesc.RasterizerState = rasterizerDesc;
+    psoDesc.BlendState = blendDesc;
+    psoDesc.DepthStencilState = depthStencilDesc;
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH;
+    psoDesc.NumRenderTargets = GBuffer::TargetCount;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.RTVFormats[1] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    psoDesc.RTVFormats[2] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    psoDesc.RTVFormats[3] = DXGI_FORMAT_R32_FLOAT;
+    psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+    psoDesc.SampleDesc = { 1, 0 };
+
+    ThrowIfFailed(m_d3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_tessGeometryPSO)));
 }

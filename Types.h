@@ -10,8 +10,9 @@ struct Vertex
     XMFLOAT3 Normal;
     XMFLOAT4 Color;
     XMFLOAT2 TexCoord;
+    XMFLOAT3 Tangent;     // Добавляем Tangent
+    XMFLOAT3 Binormal;    // Добавляем Binormal
 };
-
 struct ConstantBufferData
 {
     XMMATRIX World;

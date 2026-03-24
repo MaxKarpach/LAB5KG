@@ -40,7 +40,15 @@ public:
 
 private:
     // DirectXApp.h - добавить в private секцию:
+    // Добавьте в класс DirectXApp новые поля
+    ComPtr<ID3D12Resource> m_normalTexture;      // Карта нормалей
+    ComPtr<ID3D12Resource> m_normalTextureUpload;
+    ComPtr<ID3D12Resource> m_displacementTexture; // Карта смещения
+    ComPtr<ID3D12Resource> m_displacementTextureUpload;
 
+    bool m_useNormalMap = true;
+    bool m_useDisplacement = true;
+    float m_tessellationFactor = 3.0f;
     // ----- Shooting system -----
     void Shoot();
     std::vector<DynamicLight> m_dynamicLights;
@@ -60,7 +68,7 @@ private:
     void CreatePipelineState();
     void CreateDefaultGeometry();
     void ImportModel(const std::wstring& modelPath);
-    void UploadTexture(const TextureData& texData, int textureSlot = 0);
+    void UploadTexture(const TextureData& texData, int textureSlot = 0,bool isNormalMap = false);
     void CreateConstantBuffer();
 
     // ----- Deferred rendering methods -----
@@ -173,6 +181,11 @@ private:
 
     // GBuffer
     std::unique_ptr<GBuffer>          m_gbuffer;
+    // Добавьте в private секцию
+    void CreateTessellationPipeline();
+    void CreateTessellationGeometryPipeline();
+    ComPtr<ID3D12PipelineState> m_tessPipeline;
+    ComPtr<ID3D12PipelineState> m_tessGeometryPSO;
 
     // Rendering System
     std::unique_ptr<RenderingSystem>  m_renderingSystem;

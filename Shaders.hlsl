@@ -1,5 +1,3 @@
-// shaders.hlsl - полная версия
-
 cbuffer PerObjectCB : register(b0)
 {
     float4x4 World;
@@ -236,4 +234,245 @@ float4 LightPSMain(LightPassInput input) : SV_TARGET
     
     float3 litSRGB = pow(saturate(lit), 1.0f / 2.2f);
     return float4(litSRGB, albedo.a);
+}
+// ========== ТЕССЕЛЯЦИЯ ==========
+
+struct VS_IN
+{
+    float3 Pos : POSITION;
+    float3 Normal : NORMAL;
+    float4 Color : COLOR;
+    float2 Tex : TEXCOORD;
+    float3 Tangent : TANGENT;
+    float3 Binormal : BINORMAL;
+};
+
+struct HS_OUT
+{
+    float3 WorldPos : WORLDPOS;
+    float3 Normal : NORMAL;
+    float4 Color : COLOR;
+    float2 Tex : TEXCOORD;
+    float3 Tangent : TANGENT;
+    float3 Binormal : BINORMAL;
+};
+
+struct HS_CONST
+{
+    float edges[3] : SV_TessFactor;
+    float inside : SV_InsideTessFactor;
+};
+
+struct DS_OUT
+{
+    float4 Pos : SV_POSITION;
+    float3 Normal : NORMAL;
+    float4 Color : COLOR;
+    float2 Tex : TEXCOORD;
+};
+
+// Vertex Shader
+HS_OUT VS(VS_IN input)
+{
+    HS_OUT output;
+    output.WorldPos = mul(float4(input.Pos, 1), World).xyz;
+    output.Normal = normalize(mul(float4(input.Normal, 0), World).xyz);
+    output.Color = input.Color;
+    output.Tex = input.Tex;
+    output.Tangent = input.Tangent;
+    output.Binormal = input.Binormal;
+    return output;
+}
+
+// Hull Shader - константы патча
+HS_CONST HSConst(InputPatch<HS_OUT, 3> ip, uint pid : SV_PrimitiveID)
+{
+    HS_CONST output;
+    
+    // Просто фиксированный коэффициент 4
+    output.edges[0] = 4;
+    output.edges[1] = 4;
+    output.edges[2] = 4;
+    output.inside = 4;
+    
+    return output;
+}
+
+// Hull Shader - контрольные точки
+[domain("tri")]
+[partitioning("integer")]
+[outputtopology("triangle_cw")]
+[outputcontrolpoints(3)]
+[patchconstantfunc("HSConst")]
+HS_OUT HS(InputPatch<HS_OUT, 3> ip, uint id : SV_OutputControlPointID)
+{
+    return ip[id];
+}
+
+// Domain Shader
+[domain("tri")]
+DS_OUT DS(HS_CONST input, float3 bary : SV_DomainLocation, const OutputPatch<HS_OUT, 3> patch)
+{
+    DS_OUT output;
+    
+    // Интерполяция позиции
+    float3 worldPos = bary.x * patch[0].WorldPos +
+                      bary.y * patch[1].WorldPos +
+                      bary.z * patch[2].WorldPos;
+    
+    // Интерполяция нормали
+    float3 normal = bary.x * patch[0].Normal +
+                    bary.y * patch[1].Normal +
+                    bary.z * patch[2].Normal;
+    normal = normalize(normal);
+    
+    float2 tex = bary.x * patch[0].Tex +
+                 bary.y * patch[1].Tex +
+                 bary.z * patch[2].Tex;
+    
+    // В КЛИП
+    float4 viewPos = mul(float4(worldPos, 1), View);
+    output.Pos = mul(viewPos, Proj);
+    
+    output.Normal = normal;
+    output.Color = patch[0].Color;
+    output.Tex = tex;
+    
+    return output;
+}
+
+// Pixel Shader
+float4 PS(DS_OUT input) : SV_TARGET
+{
+    float3 lightDir = normalize(LightPos.xyz);
+    float diff = max(dot(input.Normal, lightDir), 0);
+    float3 color = diff * DiffuseLightColor.rgb;
+    return float4(color, 1);
+}
+
+// ========== ТЕССЕЛЯЦИЯ ДЛЯ DEFERRED GEOMETRY PASS ==========
+
+struct TessVS_IN
+{
+    float3 Pos : POSITION;
+    float3 Normal : NORMAL;
+    float4 Color : COLOR;
+    float2 Tex : TEXCOORD;
+    float3 Tangent : TANGENT;
+    float3 Binormal : BINORMAL;
+};
+
+struct TessHS_OUT
+{
+    float3 WorldPos : WORLDPOS;
+    float3 Normal : NORMAL;
+    float4 Color : COLOR;
+    float2 Tex : TEXCOORD;
+    float3 Tangent : TANGENT;
+    float3 Binormal : BINORMAL;
+};
+
+struct TessHS_CONST
+{
+    float edges[3] : SV_TessFactor;
+    float inside : SV_InsideTessFactor;
+};
+
+struct TessDS_Output
+{
+    float4 PosH : SV_POSITION;
+    float3 WorldPos : TEXCOORD0;
+    float3 NormalW : TEXCOORD1;
+    float2 UV : TEXCOORD2;
+    float ViewDepth : TEXCOORD3;
+};
+
+struct TessGeometryPSInput
+{
+    float4 PosH : SV_POSITION;
+    float3 WorldPos : TEXCOORD0;
+    float3 NormalW : TEXCOORD1;
+    float2 UV : TEXCOORD2;
+    float ViewDepth : TEXCOORD3;
+};
+
+// Vertex Shader
+TessHS_OUT TessVS(VS_IN input)
+{
+    TessHS_OUT output;
+    output.WorldPos = mul(float4(input.Pos, 1), World).xyz;
+    output.Normal = normalize(mul(float4(input.Normal, 0), World).xyz);
+    output.Color = input.Color;
+    output.Tex = input.Tex;
+    output.Tangent = input.Tangent;
+    output.Binormal = input.Binormal;
+    return output;
+}
+
+// Hull Shader - константы патча
+TessHS_CONST TessHSConst(InputPatch<TessHS_OUT, 3> ip, uint pid : SV_PrimitiveID)
+{
+    TessHS_CONST output;
+    output.edges[0] = 4;
+    output.edges[1] = 4;
+    output.edges[2] = 4;
+    output.inside = 4;
+    return output;
+}
+
+// Hull Shader - контрольные точки
+[domain("tri")]
+[partitioning("integer")]
+[outputtopology("triangle_cw")]
+[outputcontrolpoints(3)]
+[patchconstantfunc("TessHSConst")]
+TessHS_OUT TessHS(InputPatch<TessHS_OUT, 3> ip, uint id : SV_OutputControlPointID)
+{
+    return ip[id];
+}
+
+// Domain Shader
+[domain("tri")]
+TessDS_Output TessDS(TessHS_CONST input, float3 bary : SV_DomainLocation, const OutputPatch<TessHS_OUT, 3> patch)
+{
+    TessDS_Output output;
+    
+    float3 worldPos = bary.x * patch[0].WorldPos +
+                      bary.y * patch[1].WorldPos +
+                      bary.z * patch[2].WorldPos;
+    
+    float3 normal = bary.x * patch[0].Normal +
+                    bary.y * patch[1].Normal +
+                    bary.z * patch[2].Normal;
+    normal = normalize(normal);
+    
+    float2 tex = bary.x * patch[0].Tex +
+                 bary.y * patch[1].Tex +
+                 bary.z * patch[2].Tex;
+    
+    float4 viewPos = mul(float4(worldPos, 1), View);
+    output.PosH = mul(viewPos, Proj);
+    output.WorldPos = worldPos;
+    output.NormalW = normal;
+    output.UV = tex;
+    output.ViewDepth = viewPos.z;
+    
+    return output;
+}
+
+// Pixel Shader для Geometry Pass
+GBufferOutput TessGeometryPSMain(TessGeometryPSInput input)
+{
+    GBufferOutput o;
+    
+    float4 albedo = gMainTexture.Sample(gSampler, input.UV);
+    float3 normal = normalize(input.NormalW);
+    float depth = saturate(input.ViewDepth / 100.0f);
+    
+    o.AlbedoSpec = albedo;
+    o.WorldPos = float4(input.WorldPos, 1.0f);
+    o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
+    o.Depth = float4(depth, depth, depth, 1.0f);
+    
+    return o;
 }
