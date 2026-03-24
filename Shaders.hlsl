@@ -10,6 +10,14 @@ cbuffer PerObjectCB : register(b0)
     float2 UVOffset;
 };
 
+cbuffer TessellationCB : register(b2)
+{
+    float TessellationFactor;
+    float DisplacementStrength;
+    float TessMinDist;
+    float TessMaxDist;
+};
+
 cbuffer DeferredLightCB : register(b1)
 {
     float4 DirectionalLightDirection;
@@ -29,7 +37,6 @@ cbuffer DeferredLightCB : register(b1)
 
 Texture2D gMainTexture : register(t0);
 SamplerState gSampler : register(s0);
-
 Texture2D<float4> GAlbedoSpec : register(t0);
 Texture2D<float4> GWorldPos : register(t1);
 Texture2D<float4> GNormal : register(t2);
@@ -235,6 +242,7 @@ float4 LightPSMain(LightPassInput input) : SV_TARGET
     float3 litSRGB = pow(saturate(lit), 1.0f / 2.2f);
     return float4(litSRGB, albedo.a);
 }
+
 // ========== ТЕССЕЛЯЦИЯ ==========
 
 struct VS_IN
@@ -284,16 +292,18 @@ HS_OUT VS(VS_IN input)
     return output;
 }
 
-// Hull Shader - константы патча
+// Hull Shader - константы патча (ИСПРАВЛЕНО)
 HS_CONST HSConst(InputPatch<HS_OUT, 3> ip, uint pid : SV_PrimitiveID)
 {
     HS_CONST output;
     
-    // Просто фиксированный коэффициент 4
-    output.edges[0] = 4;
-    output.edges[1] = 4;
-    output.edges[2] = 4;
-    output.inside = 4;
+    // Используем значение из константного буфера
+    float factor = TessellationFactor;
+    
+    output.edges[0] = factor;
+    output.edges[1] = factor;
+    output.edges[2] = factor;
+    output.inside = factor;
     
     return output;
 }
@@ -309,7 +319,7 @@ HS_OUT HS(InputPatch<HS_OUT, 3> ip, uint id : SV_OutputControlPointID)
     return ip[id];
 }
 
-// Domain Shader
+// Domain Shader (с добавленным визуальным смещением для проверки)
 [domain("tri")]
 DS_OUT DS(HS_CONST input, float3 bary : SV_DomainLocation, const OutputPatch<HS_OUT, 3> patch)
 {
@@ -325,6 +335,11 @@ DS_OUT DS(HS_CONST input, float3 bary : SV_DomainLocation, const OutputPatch<HS_
                     bary.y * patch[1].Normal +
                     bary.z * patch[2].Normal;
     normal = normalize(normal);
+    
+    // ВИЗУАЛЬНАЯ ПРОВЕРКА ТЕССЕЛЯЦИИ - смещаем вершины по нормали
+    // Чем выше фактор тесселяции, тем сильнее смещение
+    // Если хотите убрать, закомментируйте следующую строку
+    worldPos += normal * 0.02f * TessellationFactor;
     
     float2 tex = bary.x * patch[0].Tex +
                  bary.y * patch[1].Tex +
@@ -409,14 +424,19 @@ TessHS_OUT TessVS(VS_IN input)
     return output;
 }
 
-// Hull Shader - константы патча
+// Hull Shader - константы патча (ИСПРАВЛЕНО)
 TessHS_CONST TessHSConst(InputPatch<TessHS_OUT, 3> ip, uint pid : SV_PrimitiveID)
 {
     TessHS_CONST output;
-    output.edges[0] = 4;
-    output.edges[1] = 4;
-    output.edges[2] = 4;
-    output.inside = 4;
+    
+    // Используем значение из константного буфера
+    float factor = TessellationFactor;
+    
+    output.edges[0] = factor;
+    output.edges[1] = factor;
+    output.edges[2] = factor;
+    output.inside = factor;
+    
     return output;
 }
 
@@ -431,7 +451,7 @@ TessHS_OUT TessHS(InputPatch<TessHS_OUT, 3> ip, uint id : SV_OutputControlPointI
     return ip[id];
 }
 
-// Domain Shader
+// Domain Shader (с добавленным визуальным смещением для проверки)
 [domain("tri")]
 TessDS_Output TessDS(TessHS_CONST input, float3 bary : SV_DomainLocation, const OutputPatch<TessHS_OUT, 3> patch)
 {
@@ -445,6 +465,11 @@ TessDS_Output TessDS(TessHS_CONST input, float3 bary : SV_DomainLocation, const 
                     bary.y * patch[1].Normal +
                     bary.z * patch[2].Normal;
     normal = normalize(normal);
+    
+    // ВИЗУАЛЬНАЯ ПРОВЕРКА ТЕССЕЛЯЦИИ - смещаем вершины по нормали
+    // Чем выше фактор тесселяции, тем сильнее смещение
+    // Если хотите убрать, закомментируйте следующую строку
+    worldPos += normal * 0.02f * TessellationFactor;
     
     float2 tex = bary.x * patch[0].Tex +
                  bary.y * patch[1].Tex +

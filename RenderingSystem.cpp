@@ -1,20 +1,21 @@
-#include "RenderingSystem.h"
+ #include "RenderingSystem.h"
 
 void RenderingSystem::RenderGeometryPass(
-    ID3D12GraphicsCommandList* cmdList,
-    ID3D12RootSignature* rootSig,
-    ID3D12PipelineState* pso,
-    const D3D12_VERTEX_BUFFER_VIEW& vbView,
-    const D3D12_INDEX_BUFFER_VIEW& ibView,
+    ID3D12GraphicsCommandList * cmdList,
+    ID3D12RootSignature * rootSig,
+    ID3D12PipelineState * pso,
+    const D3D12_VERTEX_BUFFER_VIEW & vbView,
+    const D3D12_INDEX_BUFFER_VIEW & ibView,
     UINT indexCount,
-    ID3D12DescriptorHeap* srvHeap,
-    ID3D12Resource* constantBuffer,
-    GBuffer* gbuffer,
+    ID3D12DescriptorHeap * srvHeap,
+    ID3D12Resource * constantBuffer,
+    ID3D12Resource * tessellationCB,  // ДОБАВЛЯЕМ ПАРАМЕТР
+    GBuffer * gbuffer,
     D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle)
 {
     D3D12_VIEWPORT viewport = {};
-    viewport.Width = 800;
-    viewport.Height = 600;
+    viewport.Width = static_cast<float>(800);  // лучше передавать размеры
+    viewport.Height = static_cast<float>(600);
     viewport.MaxDepth = 1.0f;
 
     D3D12_RECT scissorRect = { 0, 0, 800, 600 };
@@ -31,10 +32,20 @@ void RenderingSystem::RenderGeometryPass(
     ID3D12DescriptorHeap* heaps[] = { srvHeap };
     cmdList->SetDescriptorHeaps(1, heaps);
 
+    // Устанавливаем константный буфер для объекта (слот 0)
     cmdList->SetGraphicsRootConstantBufferView(0, constantBuffer->GetGPUVirtualAddress());
+
+    // Устанавливаем дескрипторную таблицу для текстур (слот 1)
     cmdList->SetGraphicsRootDescriptorTable(1, srvHeap->GetGPUDescriptorHandleForHeapStart());
 
-    cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    // Устанавливаем константный буфер для тесселяции (слот 2) - НОВЫЙ
+    if (tessellationCB)
+    {
+        cmdList->SetGraphicsRootConstantBufferView(2, tessellationCB->GetGPUVirtualAddress());
+    }
+
+    // ВАЖНО: Для тесселяции нужно использовать PATCHLIST
+    cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
     cmdList->IASetVertexBuffers(0, 1, &vbView);
     cmdList->IASetIndexBuffer(&ibView);
     cmdList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
@@ -91,6 +102,7 @@ void RenderingSystem::RenderForward(
     UINT indexCount,
     ID3D12DescriptorHeap* srvHeap,
     ID3D12Resource* constantBuffer,
+    ID3D12Resource* tessellationCB,  // ДОБАВЛЯЕМ ПАРАМЕТР
     D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle,
     D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle,
     int screenWidth, int screenHeight,
@@ -121,7 +133,14 @@ void RenderingSystem::RenderForward(
     cmdList->SetGraphicsRootConstantBufferView(0, constantBuffer->GetGPUVirtualAddress());
     cmdList->SetGraphicsRootDescriptorTable(1, srvHeap->GetGPUDescriptorHandleForHeapStart());
 
-    cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    // Устанавливаем константный буфер для тесселяции (слот 2)
+    if (tessellationCB)
+    {
+        cmdList->SetGraphicsRootConstantBufferView(2, tessellationCB->GetGPUVirtualAddress());
+    }
+
+    // ВАЖНО: Для тесселяции нужно использовать PATCHLIST
+    cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
     cmdList->IASetVertexBuffers(0, 1, &vbView);
     cmdList->IASetIndexBuffer(&ibView);
     cmdList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);

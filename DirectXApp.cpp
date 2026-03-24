@@ -30,6 +30,9 @@ DirectXApp::~DirectXApp()
     if (m_constantBuffer && m_mappedConstantData)
         m_constantBuffer->Unmap(0, nullptr);
 
+    if (m_tessellationCB && m_mappedTessellationData)
+        m_tessellationCB->Unmap(0, nullptr);
+
     if (m_deferredLightConstantBuffer && m_deferredLightCBMappedData)
         m_deferredLightConstantBuffer->Unmap(0, nullptr);
 
@@ -183,22 +186,30 @@ void DirectXApp::CreateRootSignature()
 {
     D3D12_DESCRIPTOR_RANGE srvRange = {};
     srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srvRange.NumDescriptors = 2;
+    srvRange.NumDescriptors = 4;  // Изменено с 2 на 4 для всех текстур
     srvRange.BaseShaderRegister = 0;
     srvRange.RegisterSpace = 0;
     srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER rootParams[2] = {};
+    D3D12_ROOT_PARAMETER rootParams[3] = {};  // Изменено с 2 на 3
 
+    // Слот 0: Константный буфер объекта (World, View, Proj и т.д.)
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[0].Descriptor.ShaderRegister = 0;
     rootParams[0].Descriptor.RegisterSpace = 0;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
+    // Слот 1: Дескрипторная таблица для текстур
     rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
     rootParams[1].DescriptorTable.pDescriptorRanges = &srvRange;
     rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    // Слот 2: Константный буфер для тесселяции (НОВЫЙ)
+    rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rootParams[2].Descriptor.ShaderRegister = 2;  // Регистр b2 в шейдере
+    rootParams[2].Descriptor.RegisterSpace = 0;
+    rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_STATIC_SAMPLER_DESC sampler = {};
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -216,7 +227,7 @@ void DirectXApp::CreateRootSignature()
     sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_ROOT_SIGNATURE_DESC desc = {};
-    desc.NumParameters = 2;
+    desc.NumParameters = 3;  // Изменено с 2 на 3
     desc.pParameters = rootParams;
     desc.NumStaticSamplers = 1;
     desc.pStaticSamplers = &sampler;
@@ -941,18 +952,24 @@ void DirectXApp::RenderGeometryPass()
 {
     D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_dsvHeap->GetCPUDescriptorHandleForHeapStart();
 
-    // Устанавливаем топологию для тесселяции
-    m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
+    // Обновляем константы тесселяции
+    TessellationConstants tessConsts;
+    tessConsts.TessellationFactor = 16.0f;
+    tessConsts.DisplacementStrength = 0.8f;
+    tessConsts.TessMinDist = 0.0f;
+    tessConsts.TessMaxDist = 30.0f;
+    memcpy(m_mappedTessellationData, &tessConsts, sizeof(tessConsts));
 
     m_renderingSystem->RenderGeometryPass(
         m_cmdList.Get(),
         m_rootSignature.Get(),
-        m_tessGeometryPSO.Get(),        // ← используем PSO с тесселяцией
+        m_tessGeometryPSO.Get(),
         m_vertexBufferView,
         m_indexBufferView,
         m_indexCount,
         m_srvHeap.Get(),
         m_constantBuffer.Get(),
+        m_tessellationCB.Get(),  // ПЕРЕДАЕМ КОНСТАНТНЫЙ БУФЕР ТЕССЕЛЯЦИИ
         m_gbuffer.get(),
         dsvHandle);
 }
@@ -1020,10 +1037,7 @@ void DirectXApp::Render()
 void DirectXApp::BuildCommandList()
 {
     ThrowIfFailed(m_cmdAllocators[m_currentBackBuffer]->Reset());
-
-    // ИСПОЛЬЗУЕМ PSO ТЕССЕЛЯЦИИ ВМЕСТО ОБЫЧНОГО
-    ThrowIfFailed(m_cmdList->Reset(
-        m_cmdAllocators[m_currentBackBuffer].Get(), m_tessPipeline.Get()));  // <-- ИЗМЕНЕНО
+    ThrowIfFailed(m_cmdList->Reset(m_cmdAllocators[m_currentBackBuffer].Get(), m_tessPipeline.Get()));
 
     D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
     D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_dsvHeap->GetCPUDescriptorHandleForHeapStart();
@@ -1036,18 +1050,24 @@ void DirectXApp::BuildCommandList()
     barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     m_cmdList->ResourceBarrier(1, &barrier);
 
-    // УСТАНАВЛИВАЕМ ПРАВИЛЬНУЮ ТОПОЛОГИЮ ДЛЯ ТЕССЕЛЯЦИИ
-    m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);  // <-- ДОБАВЛЕНО
+    // Обновляем константы тесселяции
+    TessellationConstants tessConsts;
+    tessConsts.TessellationFactor = 16.0f;
+    tessConsts.DisplacementStrength = 0.8f;
+    tessConsts.TessMinDist = 0.0f;
+    tessConsts.TessMaxDist = 30.0f;
+    memcpy(m_mappedTessellationData, &tessConsts, sizeof(tessConsts));
 
     m_renderingSystem->RenderForward(
         m_cmdList.Get(),
         m_rootSignature.Get(),
-        m_tessPipeline.Get(),  // <-- ИСПОЛЬЗУЕМ PSO ТЕССЕЛЯЦИИ
+        m_tessPipeline.Get(),
         m_vertexBufferView,
         m_indexBufferView,
         m_indexCount,
         m_srvHeap.Get(),
         m_constantBuffer.Get(),
+        m_tessellationCB.Get(),  // ПЕРЕДАЕМ КОНСТАНТНЫЙ БУФЕР ТЕССЕЛЯЦИИ
         rtvHandle,
         dsvHandle,
         m_screenWidth, m_screenHeight,
@@ -1154,6 +1174,7 @@ bool DirectXApp::Initialize()
 
         CreateTessellationPipeline();  // <-- СОЗДАЁМ PS
         CreateTessellationGeometryPipeline();
+        CreateTessellationConstantBuffer();
 
 
         ThrowIfFailed(m_cmdAllocators[0]->Reset());
@@ -1522,4 +1543,26 @@ void DirectXApp::CreateTessellationGeometryPipeline()
     psoDesc.SampleDesc = { 1, 0 };
 
     ThrowIfFailed(m_d3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_tessGeometryPSO)));
+}
+
+void DirectXApp::CreateTessellationConstantBuffer()
+{
+    UINT64 bufferSize = (sizeof(TessellationConstants) + 255) & ~255;
+
+    D3D12_HEAP_PROPERTIES heapProps = {};
+    heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+    D3D12_RESOURCE_DESC bufferDesc = {};
+    bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufferDesc.Width = bufferSize;
+    bufferDesc.Height = 1;
+    bufferDesc.DepthOrArraySize = 1;
+    bufferDesc.MipLevels = 1;
+    bufferDesc.SampleDesc = { 1, 0 };
+    bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    ThrowIfFailed(m_d3dDevice->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &bufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&m_tessellationCB)));
+
+    D3D12_RANGE mapRange = { 0, 0 };
+    ThrowIfFailed(m_tessellationCB->Map(0, &mapRange, reinterpret_cast<void**>(&m_mappedTessellationData)));
 }

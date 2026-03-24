@@ -37,11 +37,14 @@ public:
     // В public секцию
     float ReadDepthAtPixel(float screenX, float screenY);
     DirectX::XMFLOAT3 ScreenToWorld(float screenX, float screenY, float depth);
+    void CreateTessellationConstantBuffer();
 
 private:
     // DirectXApp.h - добавить в private секцию:
     // Добавьте в класс DirectXApp новые поля
     ComPtr<ID3D12Resource> m_normalTexture;      // Карта нормалей
+    ComPtr<ID3D12RootSignature> m_tessellationRootSignature;
+    void CreateTessellationRootSignature();
     ComPtr<ID3D12Resource> m_normalTextureUpload;
     ComPtr<ID3D12Resource> m_displacementTexture; // Карта смещения
     ComPtr<ID3D12Resource> m_displacementTextureUpload;
@@ -68,7 +71,7 @@ private:
     void CreatePipelineState();
     void CreateDefaultGeometry();
     void ImportModel(const std::wstring& modelPath);
-    void UploadTexture(const TextureData& texData, int textureSlot = 0,bool isNormalMap = false);
+    void UploadTexture(const TextureData& texData, int textureSlot = 0, bool isNormalMap = false);
     void CreateConstantBuffer();
 
     // ----- Deferred rendering methods -----
@@ -195,6 +198,18 @@ private:
     UINT64                            m_fenceValues[BACK_BUFFER_COUNT] = {};
     HANDLE                            m_fenceEvent = nullptr;
     UINT                              m_currentBackBuffer = 0;
+
+    struct TessellationConstants
+    {
+        float TessellationFactor;
+        float DisplacementStrength;
+        float TessMinDist;
+        float TessMaxDist;
+        float Padding[4];
+    };
+    // Tessellation constant buffer
+    ComPtr<ID3D12Resource> m_tessellationCB;
+    TessellationConstants* m_mappedTessellationData = nullptr;
 
     // Rendering mode
     bool m_useDeferredRendering = true;

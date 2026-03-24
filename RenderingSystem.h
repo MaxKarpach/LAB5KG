@@ -26,6 +26,7 @@ public:
         UINT indexCount,
         ID3D12DescriptorHeap* srvHeap,
         ID3D12Resource* constantBuffer,
+        ID3D12Resource* tessellationCB,  // НОВЫЙ ПАРАМЕТР
         GBuffer* gbuffer,
         D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle);
 
@@ -48,6 +49,7 @@ public:
         UINT indexCount,
         ID3D12DescriptorHeap* srvHeap,
         ID3D12Resource* constantBuffer,
+        ID3D12Resource* tessellationCB,  // НОВЫЙ ПАРАМЕТР
         D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle,
         D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle,
         int screenWidth, int screenHeight,
