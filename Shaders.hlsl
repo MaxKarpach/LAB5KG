@@ -36,6 +36,8 @@ cbuffer DeferredLightCB : register(b1)
 };
 
 Texture2D gMainTexture : register(t0);
+Texture2D gNormalMap : register(t1); // НОВО: карта нормалей
+Texture2D gDisplacementMap : register(t2); // НОВО: карта смещения
 SamplerState gSampler : register(s0);
 Texture2D<float4> GAlbedoSpec : register(t0);
 Texture2D<float4> GWorldPos : register(t1);
@@ -185,26 +187,27 @@ float4 LightPSMain(LightPassInput input) : SV_TARGET
     float directionalNdotL = saturate(dot(normal, directionalL));
     lit += DirectionalLightColor.rgb * directionalNdotL * albedo.rgb * DirectionalLightColor.a;
     
-    // Static point lights
+    // Static point lights - используем staticIdx вместо i
     int staticPointCount = 6;
-    for (int i = 0; i < staticPointCount; ++i)
+    for (int staticIdx = 0; staticIdx < staticPointCount; ++staticIdx)
     {
-        float3 toLight = PointLightPositionRange[i].xyz - worldPos;
+        float3 toLight = PointLightPositionRange[staticIdx].xyz - worldPos;
         float dist = length(toLight);
-        float range = max(PointLightPositionRange[i].w, 0.0001f);
+        float range = max(PointLightPositionRange[staticIdx].w, 0.0001f);
         float falloff = saturate(1.0f - dist / range);
         float attenuation = falloff * falloff;
         
         float3 L = toLight / max(dist, 0.0001f);
         float ndotl = saturate(dot(normal, L));
-        float intensity = PointLightColorIntensity[i].a;
-        lit += PointLightColorIntensity[i].rgb * ndotl * attenuation * intensity * albedo.rgb;
+        float intensity = PointLightColorIntensity[staticIdx].a;
+        lit += PointLightColorIntensity[staticIdx].rgb * ndotl * attenuation * intensity * albedo.rgb;
     }
     
+    // Dynamic lights - используем dynamicIdx вместо i
     int dynamicCount = (int) LightCounts.z;
-    for (int i = 0; i < dynamicCount; ++i)
+    for (int dynamicIdx = 0; dynamicIdx < dynamicCount; ++dynamicIdx)
     {
-        int idx = staticPointCount + i;
+        int idx = staticPointCount + dynamicIdx;
         float3 toLight = PointLightPositionRange[idx].xyz - worldPos;
         float dist = length(toLight);
         float range = max(PointLightPositionRange[idx].w, 0.0001f);
@@ -217,26 +220,26 @@ float4 LightPSMain(LightPassInput input) : SV_TARGET
         lit += PointLightColorIntensity[idx].rgb * ndotl * attenuation * intensity * albedo.rgb;
     }
     
-    // Spot lights
+    // Spot lights - используем spotIdx вместо i
     int spotCount = (int) LightCounts.y;
-    for (int i = 0; i < spotCount; ++i)
+    for (int spotIdx = 0; spotIdx < spotCount; ++spotIdx)
     {
-        float3 toLight = SpotLightPositionRange[i].xyz - worldPos;
+        float3 toLight = SpotLightPositionRange[spotIdx].xyz - worldPos;
         float dist = length(toLight);
-        float range = max(SpotLightPositionRange[i].w, 0.0001f);
+        float range = max(SpotLightPositionRange[spotIdx].w, 0.0001f);
         float3 L = toLight / max(dist, 0.0001f);
         
         float falloff = saturate(1.0f - dist / range);
         float attenuation = falloff * falloff;
         
-        float3 spotDir = normalize(SpotLightDirectionCosine[i].xyz);
-        float coneCos = SpotLightDirectionCosine[i].w;
+        float3 spotDir = normalize(SpotLightDirectionCosine[spotIdx].xyz);
+        float coneCos = SpotLightDirectionCosine[spotIdx].w;
         float spotAmount = saturate((dot(-L, spotDir) - coneCos) / max(1.0f - coneCos, 0.0001f));
         spotAmount = spotAmount * spotAmount * spotAmount;
         
         float ndotl = saturate(dot(normal, L));
-        float intensity = SpotLightColorIntensity[i].a;
-        lit += SpotLightColorIntensity[i].rgb * ndotl * attenuation * spotAmount * intensity * albedo.rgb;
+        float intensity = SpotLightColorIntensity[spotIdx].a;
+        lit += SpotLightColorIntensity[spotIdx].rgb * ndotl * attenuation * spotAmount * intensity * albedo.rgb;
     }
     
     float3 litSRGB = pow(saturate(lit), 1.0f / 2.2f);
@@ -274,11 +277,14 @@ struct HS_CONST
 struct DS_OUT
 {
     float4 Pos : SV_POSITION;
+    float3 PosW : POSITION; // ДОБАВИТЬ эту строку
     float3 Normal : NORMAL;
+    float3 Tangent : TANGENT;
+    float3 Binormal : BINORMAL;
     float4 Color : COLOR;
     float2 Tex : TEXCOORD;
 };
-
+// Vertex Shader
 // Vertex Shader
 HS_OUT VS(VS_IN input)
 {
@@ -287,18 +293,31 @@ HS_OUT VS(VS_IN input)
     output.Normal = normalize(mul(float4(input.Normal, 0), World).xyz);
     output.Color = input.Color;
     output.Tex = input.Tex;
-    output.Tangent = input.Tangent;
-    output.Binormal = input.Binormal;
+    
+    // НОВО: преобразуем tangent и binormal в мировое пространство
+    float3x3 W3 = (float3x3) World;
+    output.Tangent = normalize(mul(W3, input.Tangent));
+    output.Binormal = normalize(mul(W3, input.Binormal));
+    
     return output;
 }
 
-// Hull Shader - константы патча (ИСПРАВЛЕНО)
+// Hull Shader - константы патча с адаптивной тесселяцией
 HS_CONST HSConst(InputPatch<HS_OUT, 3> ip, uint pid : SV_PrimitiveID)
 {
     HS_CONST output;
     
-    // Используем значение из константного буфера
+    // Вычисляем центр патча
+    float3 center = (ip[0].WorldPos + ip[1].WorldPos + ip[2].WorldPos) / 3.0f;
+    float dist = length(center - CameraPos.xyz);
+    
+    // Адаптивный фактор на основе расстояния
     float factor = TessellationFactor;
+    if (dist > TessMinDist && TessMaxDist > TessMinDist)
+    {
+        float t = saturate((dist - TessMinDist) / (TessMaxDist - TessMinDist));
+        factor = lerp(TessellationFactor, 1.0f, t);
+    }
     
     output.edges[0] = factor;
     output.edges[1] = factor;
@@ -319,7 +338,7 @@ HS_OUT HS(InputPatch<HS_OUT, 3> ip, uint id : SV_OutputControlPointID)
     return ip[id];
 }
 
-// Domain Shader (с добавленным визуальным смещением для проверки)
+// Domain Shader
 [domain("tri")]
 DS_OUT DS(HS_CONST input, float3 bary : SV_DomainLocation, const OutputPatch<HS_OUT, 3> patch)
 {
@@ -336,35 +355,69 @@ DS_OUT DS(HS_CONST input, float3 bary : SV_DomainLocation, const OutputPatch<HS_
                     bary.z * patch[2].Normal;
     normal = normalize(normal);
     
-    // ВИЗУАЛЬНАЯ ПРОВЕРКА ТЕССЕЛЯЦИИ - смещаем вершины по нормали
-    // Чем выше фактор тесселяции, тем сильнее смещение
-    // Если хотите убрать, закомментируйте следующую строку
-    worldPos += normal * 0.02f * TessellationFactor;
+    // Интерполяция tangent и binormal
+    float3 tangent = bary.x * patch[0].Tangent +
+                     bary.y * patch[1].Tangent +
+                     bary.z * patch[2].Tangent;
+    tangent = normalize(tangent);
     
+    float3 binormal = bary.x * patch[0].Binormal +
+                      bary.y * patch[1].Binormal +
+                      bary.z * patch[2].Binormal;
+    binormal = normalize(binormal);
+    
+    // Интерполяция UV
     float2 tex = bary.x * patch[0].Tex +
                  bary.y * patch[1].Tex +
                  bary.z * patch[2].Tex;
     
-    // В КЛИП
+    // ===== DISPLACEMENT MAPPING =====
+    // Простой Sample (без LOD)
+    // ===== DISPLACEMENT MAPPING - ТОЛЬКО ЧТЕНИЕ =====
+    float height = gDisplacementMap.Sample(gSampler, tex).r;
+    // ПОКА НЕ СМЕЩАЕМ
+    float displacement = (height - 0.5f) * DisplacementStrength;
+   //  worldPos += normal * displacement;
+    
+    // В клип
     float4 viewPos = mul(float4(worldPos, 1), View);
     output.Pos = mul(viewPos, Proj);
     
+    output.PosW = worldPos;
     output.Normal = normal;
+    output.Tangent = tangent;
+    output.Binormal = binormal;
     output.Color = patch[0].Color;
     output.Tex = tex;
     
     return output;
 }
-
 // Pixel Shader
+// Pixel Shader с normal mapping
 float4 PS(DS_OUT input) : SV_TARGET
 {
+    float3 normalMap = gNormalMap.Sample(gSampler, input.Tex).rgb;
+    float3 normalTS = normalMap * 2.0f - 1.0f;
+    normalTS = normalize(normalTS);
+    
+    float3 N = normalize(input.Normal);
+    float3 T = normalize(input.Tangent);
+    float3 B = normalize(input.Binormal);
+    
+    float3x3 TBN = float3x3(T, B, N);
+    float3 finalNormal = normalize(mul(normalTS, TBN));
+    
     float3 lightDir = normalize(LightPos.xyz);
-    float diff = max(dot(input.Normal, lightDir), 0);
+    float diff = max(dot(finalNormal, lightDir), 0);
     float3 color = diff * DiffuseLightColor.rgb;
+    color += DiffuseLightColor.rgb * 0.2f;
+    
+    // Displacement визуализация
+    float height = gDisplacementMap.Sample(gSampler, input.Tex).r;
+    color = lerp(color, float3(1, 0, 0), height * 0.7f);
+    
     return float4(color, 1);
 }
-
 // ========== ТЕССЕЛЯЦИЯ ДЛЯ DEFERRED GEOMETRY PASS ==========
 
 struct TessVS_IN
@@ -398,6 +451,8 @@ struct TessDS_Output
     float4 PosH : SV_POSITION;
     float3 WorldPos : TEXCOORD0;
     float3 NormalW : TEXCOORD1;
+    float3 TangentW : TEXCOORD4; // ДОБАВИТЬ
+    float3 BinormalW : TEXCOORD5; // ДОБАВИТЬ
     float2 UV : TEXCOORD2;
     float ViewDepth : TEXCOORD3;
 };
@@ -407,10 +462,12 @@ struct TessGeometryPSInput
     float4 PosH : SV_POSITION;
     float3 WorldPos : TEXCOORD0;
     float3 NormalW : TEXCOORD1;
+    float3 TangentW : TEXCOORD4; // ДОБАВИТЬ
+    float3 BinormalW : TEXCOORD5; // ДОБАВИТЬ
     float2 UV : TEXCOORD2;
     float ViewDepth : TEXCOORD3;
 };
-
+ 
 // Vertex Shader
 TessHS_OUT TessVS(VS_IN input)
 {
@@ -419,8 +476,12 @@ TessHS_OUT TessVS(VS_IN input)
     output.Normal = normalize(mul(float4(input.Normal, 0), World).xyz);
     output.Color = input.Color;
     output.Tex = input.Tex;
-    output.Tangent = input.Tangent;
-    output.Binormal = input.Binormal;
+    
+    // ДОБАВИТЬ
+    float3x3 W3 = (float3x3) World;
+    output.Tangent = normalize(mul(W3, input.Tangent));
+    output.Binormal = normalize(mul(W3, input.Binormal));
+    
     return output;
 }
 
@@ -452,6 +513,7 @@ TessHS_OUT TessHS(InputPatch<TessHS_OUT, 3> ip, uint id : SV_OutputControlPointI
 }
 
 // Domain Shader (с добавленным визуальным смещением для проверки)
+// Domain Shader
 [domain("tri")]
 TessDS_Output TessDS(TessHS_CONST input, float3 bary : SV_DomainLocation, const OutputPatch<TessHS_OUT, 3> patch)
 {
@@ -466,37 +528,65 @@ TessDS_Output TessDS(TessHS_CONST input, float3 bary : SV_DomainLocation, const 
                     bary.z * patch[2].Normal;
     normal = normalize(normal);
     
-    // ВИЗУАЛЬНАЯ ПРОВЕРКА ТЕССЕЛЯЦИИ - смещаем вершины по нормали
-    // Чем выше фактор тесселяции, тем сильнее смещение
-    // Если хотите убрать, закомментируйте следующую строку
-    worldPos += normal * 0.02f * TessellationFactor;
+    // ДОБАВИТЬ: интерполяция tangent и binormal
+    float3 tangent = bary.x * patch[0].Tangent +
+                     bary.y * patch[1].Tangent +
+                     bary.z * patch[2].Tangent;
+    tangent = normalize(tangent);
+    
+    float3 binormal = bary.x * patch[0].Binormal +
+                      bary.y * patch[1].Binormal +
+                      bary.z * patch[2].Binormal;
+    binormal = normalize(binormal);
     
     float2 tex = bary.x * patch[0].Tex +
                  bary.y * patch[1].Tex +
                  bary.z * patch[2].Tex;
     
+    // УБРАТЬ визуальное смещение и добавить displacement (если нужно)
+    // worldPos += normal * 0.02f * TessellationFactor; // УДАЛИТЬ
+    
+    // МОЖНО ДОБАВИТЬ displacement если нужно
+    // float height = gDisplacementMap.Sample(gSampler, tex).r;
+    // float displacement = (height - 0.5f) * DisplacementStrength;
+    // worldPos += normal * displacement;
+    
     float4 viewPos = mul(float4(worldPos, 1), View);
     output.PosH = mul(viewPos, Proj);
     output.WorldPos = worldPos;
     output.NormalW = normal;
+    output.TangentW = tangent; // ДОБАВИТЬ
+    output.BinormalW = binormal; // ДОБАВИТЬ
     output.UV = tex;
     output.ViewDepth = viewPos.z;
     
     return output;
 }
 
-// Pixel Shader для Geometry Pass
+// Pixel Shader для Geometry Pass с normal mapping
 GBufferOutput TessGeometryPSMain(TessGeometryPSInput input)
 {
     GBufferOutput o;
     
     float4 albedo = gMainTexture.Sample(gSampler, input.UV);
-    float3 normal = normalize(input.NormalW);
+    
+    // ДОБАВИТЬ: normal mapping для deferred
+    float3 normalMap = gNormalMap.Sample(gSampler, input.UV).rgb;
+    float3 normalTS = normalMap * 2.0f - 1.0f;
+    normalTS = normalize(normalTS);
+    
+    float3 N = normalize(input.NormalW);
+    float3 T = normalize(input.TangentW);
+    float3 B = normalize(input.BinormalW);
+    
+    float3x3 TBN = float3x3(T, B, N);
+    float3 finalNormal = normalize(mul(normalTS, TBN));
+    
     float depth = saturate(input.ViewDepth / 100.0f);
     
     o.AlbedoSpec = albedo;
     o.WorldPos = float4(input.WorldPos, 1.0f);
-    o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
+    o.Normal = float4(finalNormal * 0.5f + 0.5f, 1.0f);
     o.Depth = float4(depth, depth, depth, 1.0f);
     
     return o;

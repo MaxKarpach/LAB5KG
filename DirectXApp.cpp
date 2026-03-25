@@ -61,9 +61,10 @@ void DirectXApp::CreateDescriptorHeaps()
         ThrowIfFailed(m_d3dDevice->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_dsvHeap)));
     }
 
+    // SRV/CBV/UAV heap - увеличиваем до 8 для всех текстур
     {
         D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-        heapDesc.NumDescriptors = 4;  // Было 2, стало 4
+        heapDesc.NumDescriptors = 8;  // Увеличено для 4 текстур + запас
         heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         ThrowIfFailed(m_d3dDevice->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_srvHeap)));
@@ -184,30 +185,47 @@ ComPtr<ID3DBlob> DirectXApp::CompileShaderFile(const std::wstring& filePath,
 
 void DirectXApp::CreateRootSignature()
 {
-    D3D12_DESCRIPTOR_RANGE srvRange = {};
-    srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srvRange.NumDescriptors = 4;  // Изменено с 2 на 4 для всех текстур
-    srvRange.BaseShaderRegister = 0;
-    srvRange.RegisterSpace = 0;
-    srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+    // Изменяем количество дескрипторов с 1 на 3 (main, normal, displacement)
+    D3D12_DESCRIPTOR_RANGE srvRanges[3] = {};
 
-    D3D12_ROOT_PARAMETER rootParams[3] = {};  // Изменено с 2 на 3
+    // SRV для основной текстуры (t0)
+    srvRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    srvRanges[0].NumDescriptors = 1;
+    srvRanges[0].BaseShaderRegister = 0;
+    srvRanges[0].RegisterSpace = 0;
+    srvRanges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    // Слот 0: Константный буфер объекта (World, View, Proj и т.д.)
+    // SRV для карты нормалей (t1)
+    srvRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    srvRanges[1].NumDescriptors = 1;
+    srvRanges[1].BaseShaderRegister = 1;
+    srvRanges[1].RegisterSpace = 0;
+    srvRanges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    // SRV для карты смещения (t2)
+    srvRanges[2].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    srvRanges[2].NumDescriptors = 1;
+    srvRanges[2].BaseShaderRegister = 2;
+    srvRanges[2].RegisterSpace = 0;
+    srvRanges[2].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER rootParams[3] = {};
+
+    // Слот 0: Константный буфер объекта (b0)
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[0].Descriptor.ShaderRegister = 0;
     rootParams[0].Descriptor.RegisterSpace = 0;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    // Слот 1: Дескрипторная таблица для текстур
+    // Слот 1: Дескрипторная таблица для текстур (3 текстуры)
     rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
-    rootParams[1].DescriptorTable.pDescriptorRanges = &srvRange;
+    rootParams[1].DescriptorTable.NumDescriptorRanges = 3;  // Было 1, стало 3
+    rootParams[1].DescriptorTable.pDescriptorRanges = srvRanges;
     rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
-    // Слот 2: Константный буфер для тесселяции (НОВЫЙ)
+    // Слот 2: Константный буфер тесселяции (b2)
     rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-    rootParams[2].Descriptor.ShaderRegister = 2;  // Регистр b2 в шейдере
+    rootParams[2].Descriptor.ShaderRegister = 2;
     rootParams[2].Descriptor.RegisterSpace = 0;
     rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
@@ -227,7 +245,7 @@ void DirectXApp::CreateRootSignature()
     sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_ROOT_SIGNATURE_DESC desc = {};
-    desc.NumParameters = 3;  // Изменено с 2 на 3
+    desc.NumParameters = 3;  // Было 2, стало 3
     desc.pParameters = rootParams;
     desc.NumStaticSamplers = 1;
     desc.pStaticSamplers = &sampler;
@@ -1172,10 +1190,9 @@ bool DirectXApp::Initialize()
         CreatePipelineState();
         CreateDeferredPipelines();
 
-        CreateTessellationPipeline();  // <-- СОЗДАЁМ PS
+        CreateTessellationPipeline();
         CreateTessellationGeometryPipeline();
         CreateTessellationConstantBuffer();
-
 
         ThrowIfFailed(m_cmdAllocators[0]->Reset());
         ThrowIfFailed(m_cmdList->Reset(m_cmdAllocators[0].Get(), nullptr));
@@ -1186,66 +1203,116 @@ bool DirectXApp::Initialize()
             std::wstring workingDir(exePath);
             workingDir = workingDir.substr(0, workingDir.find_last_of(L"\\/") + 1);
 
+            // Загрузка модели
             ObjResult modelData = LoadObj(workingDir + L"model.obj");
             if (modelData.valid)
             {
                 BuildMeshBuffers(modelData.vertices, modelData.indices);
+                MessageBoxA(m_windowHandle, "Model loaded successfully!", "Info", MB_OK);
             }
             else
             {
                 CreateDefaultGeometry();
+                MessageBoxA(m_windowHandle, "Using default cube geometry", "Info", MB_OK);
             }
 
-            TextureData texData1 = LoadTextureWIC(workingDir + L"texture_first.png");
-            if (!texData1.valid)
-                texData1 = LoadTextureWIC(workingDir + L"texture_first.jpg");
-            if (!texData1.valid)
+            // ========== ЗАГРУЗКА ТЕКСТУР ==========
+
+            // Текстура 0: Основная текстура (diffuse/albedo)
+            TextureData texData0 = LoadTextureWIC(workingDir + L"texture_first.png");
+            if (!texData0.valid)
+                texData0 = LoadTextureWIC(workingDir + L"texture_first.jpg");
+            if (texData0.valid)
             {
-                MessageBoxA(m_windowHandle, "Missing first texture file!", "Texture Error", MB_OK | MB_ICONERROR);
-                return false;
+                UploadTexture(texData0, 0, false);
+                MessageBoxA(m_windowHandle, "Main texture loaded!", "Info", MB_OK);
             }
-            UploadTexture(texData1, 0);
-
-            TextureData texData2 = LoadTextureWIC(workingDir + L"texture_second.png");
-            if (!texData2.valid)
-                texData2 = LoadTextureWIC(workingDir + L"texture_second.jpg");
-            if (!texData2.valid)
+            else
             {
-                MessageBoxA(m_windowHandle, "Missing second texture file!", "Texture Error", MB_OK | MB_ICONERROR);
-                return false;
+                // Создаем текстуру-заглушку (серая)
+                TextureData dummy;
+                dummy.width = 2;
+                dummy.height = 2;
+                dummy.valid = true;
+                dummy.pixels.resize(2 * 2 * 4);
+                for (size_t i = 0; i < dummy.pixels.size(); i += 4)
+                {
+                    dummy.pixels[i + 0] = 128;
+                    dummy.pixels[i + 1] = 128;
+                    dummy.pixels[i + 2] = 128;
+                    dummy.pixels[i + 3] = 255;
+                }
+                UploadTexture(dummy, 0, false);
+                MessageBoxA(m_windowHandle, "Using dummy main texture", "Warning", MB_OK);
             }
-            UploadTexture(texData2, 1);
 
-            // В методе Initialize, после загрузки основных текстур, добавьте:
-
-// Загрузка карты нормалей
+            // Текстура 1: Карта нормалей (normal map)
             TextureData normalData = LoadTextureWIC(workingDir + L"normal.png");
             if (!normalData.valid)
                 normalData = LoadTextureWIC(workingDir + L"normal.jpg");
             if (normalData.valid)
             {
-                UploadTexture(normalData, 2, true); // slot 2 для карты нормалей
+                UploadTexture(normalData, 1, true); // Слот 1 для карты нормалей
                 m_useNormalMap = true;
+                MessageBoxA(m_windowHandle, "Normal map loaded!", "Info", MB_OK);
             }
             else
             {
-                MessageBoxA(m_windowHandle, "Missing normal map file! Using flat lighting.", "Warning", MB_OK | MB_ICONWARNING);
+                // Создаем фиктивную карту нормалей (RGB 128,128,255 -> нормаль 0,0,1)
+                TextureData dummyNormal;
+                dummyNormal.width = 2;
+                dummyNormal.height = 2;
+                dummyNormal.valid = true;
+                dummyNormal.pixels.resize(2 * 2 * 4);
+                for (size_t i = 0; i < dummyNormal.pixels.size(); i += 4)
+                {
+                    dummyNormal.pixels[i + 0] = 128; // R = 0.5
+                    dummyNormal.pixels[i + 1] = 128; // G = 0.5
+                    dummyNormal.pixels[i + 2] = 255; // B = 1.0
+                    dummyNormal.pixels[i + 3] = 255;
+                }
+                UploadTexture(dummyNormal, 1, true);
                 m_useNormalMap = false;
+                MessageBoxA(m_windowHandle, "Using dummy normal map", "Warning", MB_OK);
             }
 
-            // Загрузка карты смещения (displacement)
+            // Текстура 2: Карта смещения (displacement map)
             TextureData displacementData = LoadTextureWIC(workingDir + L"displacement.png");
             if (!displacementData.valid)
                 displacementData = LoadTextureWIC(workingDir + L"displacement.jpg");
             if (displacementData.valid)
             {
-                UploadTexture(displacementData, 3, false); // slot 3 для карты смещения
+                UploadTexture(displacementData, 2, false); // Слот 2 для карты смещения
                 m_useDisplacement = true;
+                MessageBoxA(m_windowHandle, "Displacement map loaded!", "Info", MB_OK);
             }
             else
             {
-                MessageBoxA(m_windowHandle, "Missing displacement map file!", "Warning", MB_OK | MB_ICONWARNING);
+                // Создаем фиктивную карту смещения (серый 128 -> нет смещения)
+                TextureData dummyDisplacement;
+                dummyDisplacement.width = 2;
+                dummyDisplacement.height = 2;
+                dummyDisplacement.valid = true;
+                dummyDisplacement.pixels.resize(2 * 2 * 4);
+                for (size_t i = 0; i < dummyDisplacement.pixels.size(); i += 4)
+                {
+                    dummyDisplacement.pixels[i + 0] = 128; // R = 0.5 (нет смещения)
+                    dummyDisplacement.pixels[i + 1] = 128;
+                    dummyDisplacement.pixels[i + 2] = 128;
+                    dummyDisplacement.pixels[i + 3] = 255;
+                }
+                UploadTexture(dummyDisplacement, 2, false);
                 m_useDisplacement = false;
+                MessageBoxA(m_windowHandle, "Using dummy displacement map", "Warning", MB_OK);
+            }
+
+            // Текстура 3: Вторая текстура (опционально, для слота 3)
+            TextureData texData3 = LoadTextureWIC(workingDir + L"texture_second.png");
+            if (!texData3.valid)
+                texData3 = LoadTextureWIC(workingDir + L"texture_second.jpg");
+            if (texData3.valid)
+            {
+                UploadTexture(texData3, 3, false);
             }
         }
 
@@ -1256,6 +1323,13 @@ bool DirectXApp::Initialize()
 
         CreateConstantBuffer();
         UpdateLightingConstants();
+
+        // Выводим итоговую информацию
+        std::string info = "Initialization complete!\n";
+        info += "Normal map: " + std::string(m_useNormalMap ? "YES" : "NO (using dummy)") + "\n";
+        info += "Displacement: " + std::string(m_useDisplacement ? "YES" : "NO (using dummy)") + "\n";
+        info += "Tessellation factor: " + std::to_string(GetAdaptiveTessellationFactor()) + "\n";
+        MessageBoxA(m_windowHandle, info.c_str(), "Initialization Info", MB_OK);
     }
     catch (const std::exception& e)
     {
