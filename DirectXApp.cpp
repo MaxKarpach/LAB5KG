@@ -954,7 +954,7 @@ void DirectXApp::RenderGeometryPass()
 
     // Обновляем константы тесселяции
     TessellationConstants tessConsts;
-    tessConsts.TessellationFactor = 16.0f;
+    tessConsts.TessellationFactor = GetAdaptiveTessellationFactor();
     tessConsts.DisplacementStrength = 0.8f;
     tessConsts.TessMinDist = 0.0f;
     tessConsts.TessMaxDist = 30.0f;
@@ -1052,7 +1052,7 @@ void DirectXApp::BuildCommandList()
 
     // Обновляем константы тесселяции
     TessellationConstants tessConsts;
-    tessConsts.TessellationFactor = 16.0f;
+    tessConsts.TessellationFactor = GetAdaptiveTessellationFactor();
     tessConsts.DisplacementStrength = 0.8f;
     tessConsts.TessMinDist = 0.0f;
     tessConsts.TessMaxDist = 30.0f;
@@ -1565,4 +1565,33 @@ void DirectXApp::CreateTessellationConstantBuffer()
 
     D3D12_RANGE mapRange = { 0, 0 };
     ThrowIfFailed(m_tessellationCB->Map(0, &mapRange, reinterpret_cast<void**>(&m_mappedTessellationData)));
+}
+
+float DirectXApp::GetAdaptiveTessellationFactor()
+{
+    // Центр модели
+    DirectX::XMFLOAT3 modelCenter = DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f);
+
+    // Позиция камеры
+    DirectX::XMFLOAT3 cameraPos = m_camera.GetPosition();
+
+    // Расстояние
+    float dx = cameraPos.x - modelCenter.x;
+    float dy = cameraPos.y - modelCenter.y;
+    float dz = cameraPos.z - modelCenter.z;
+    float distance = sqrt(dx * dx + dy * dy + dz * dz);
+
+    // Параметры
+    float maxTessFactor = 16.0f;   // близко
+    float minTessFactor = 1.0f;    // далеко
+    float maxDistance = 50.0f;
+    float minDistance = 5.0f;
+
+    // Интерполяция
+    float t = (distance - minDistance) / (maxDistance - minDistance);
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+
+    float factor = maxTessFactor * (1.0f - t) + minTessFactor * t;
+    return factor;
 }

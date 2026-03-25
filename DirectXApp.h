@@ -199,6 +199,8 @@ private:
     HANDLE                            m_fenceEvent = nullptr;
     UINT                              m_currentBackBuffer = 0;
 
+    float GetAdaptiveTessellationFactor();
+
     struct TessellationConstants
     {
         float TessellationFactor;
