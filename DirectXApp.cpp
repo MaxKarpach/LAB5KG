@@ -636,15 +636,20 @@ void DirectXApp::UploadTexture(const TextureData& texData, int textureSlot, bool
         targetTexture = &m_textureSecond;
         uploadBuffer = &m_textureSecondUpload;
     }
-    else if (textureSlot == 2)
+    else if (textureSlot == 2)  // Normal map
     {
         targetTexture = &m_normalTexture;
         uploadBuffer = &m_normalTextureUpload;
     }
-    else // slot 3
+    else if (textureSlot == 3)  // Displacement map
     {
         targetTexture = &m_displacementTexture;
         uploadBuffer = &m_displacementTextureUpload;
+    }
+    else
+    {
+        ThrowIfFailed(E_INVALIDARG, "Invalid texture slot");
+        return;
     }
 
     if (!targetTexture || !uploadBuffer)
@@ -662,7 +667,17 @@ void DirectXApp::UploadTexture(const TextureData& texData, int textureSlot, bool
     textureDesc.Height = texData.height;
     textureDesc.DepthOrArraySize = 1;
     textureDesc.MipLevels = 1;
-    textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+    // Для displacement текстуры (слот 3) используем R8_UNORM
+    if (textureSlot == 3)  // displacement map slot
+    {
+        textureDesc.Format = DXGI_FORMAT_R8_UNORM;
+    }
+    else
+    {
+        textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    }
+
     textureDesc.SampleDesc = { 1, 0 };
     textureDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
@@ -674,7 +689,7 @@ void DirectXApp::UploadTexture(const TextureData& texData, int textureSlot, bool
         &textureDesc,
         D3D12_RESOURCE_STATE_COPY_DEST,
         nullptr,
-        IID_PPV_ARGS(targetTexture->GetAddressOf())));  // Изменено!
+        IID_PPV_ARGS(targetTexture->GetAddressOf())));
 
     // Получаем информацию о размере для копирования
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
@@ -702,18 +717,36 @@ void DirectXApp::UploadTexture(const TextureData& texData, int textureSlot, bool
         &uploadDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ,
         nullptr,
-        IID_PPV_ARGS(uploadBuffer->GetAddressOf())));  // Изменено!
+        IID_PPV_ARGS(uploadBuffer->GetAddressOf())));
 
     // Копируем данные в буфер
     uint8_t* mappedMemory = nullptr;
     (*uploadBuffer)->Map(0, nullptr, reinterpret_cast<void**>(&mappedMemory));
+
     UINT sourceRowPitch = texData.width * 4;
-    for (UINT row = 0; row < texData.height; ++row)
+
+    // Для displacement текстуры (слот 3) копируем только R канал
+    if (textureSlot == 3)
     {
-        memcpy(mappedMemory + (UINT64)footprint.Footprint.RowPitch * row,
-            texData.pixels.data() + (UINT64)sourceRowPitch * row,
-            sourceRowPitch);
+        for (UINT row = 0; row < texData.height; ++row)
+        {
+            for (UINT col = 0; col < texData.width; ++col)
+            {
+                uint8_t r = texData.pixels[(row * texData.width + col) * 4 + 0];
+                mappedMemory[(UINT64)footprint.Footprint.RowPitch * row + col] = r;
+            }
+        }
     }
+    else
+    {
+        for (UINT row = 0; row < texData.height; ++row)
+        {
+            memcpy(mappedMemory + (UINT64)footprint.Footprint.RowPitch * row,
+                texData.pixels.data() + (UINT64)sourceRowPitch * row,
+                sourceRowPitch);
+        }
+    }
+
     (*uploadBuffer)->Unmap(0, nullptr);
 
     // Копируем текстуру из буфера в GPU память
@@ -750,7 +783,17 @@ void DirectXApp::UploadTexture(const TextureData& texData, int textureSlot, bool
 
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+    // Для displacement текстуры используем R8_UNORM
+    if (textureSlot == 3)
+    {
+        srvDesc.Format = DXGI_FORMAT_R8_UNORM;
+    }
+    else
+    {
+        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    }
+
     srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Texture2D.MipLevels = 1;
     m_d3dDevice->CreateShaderResourceView(targetTexture->Get(), &srvDesc, srvHandle);
@@ -973,7 +1016,7 @@ void DirectXApp::RenderGeometryPass()
     // Обновляем константы тесселяции
     TessellationConstants tessConsts;
     tessConsts.TessellationFactor = GetAdaptiveTessellationFactor();
-    tessConsts.DisplacementStrength = 0.8f;
+    tessConsts.DisplacementStrength = 0.02f;
     tessConsts.TessMinDist = 0.0f;
     tessConsts.TessMaxDist = 30.0f;
     memcpy(m_mappedTessellationData, &tessConsts, sizeof(tessConsts));
@@ -1071,7 +1114,7 @@ void DirectXApp::BuildCommandList()
     // Обновляем константы тесселяции
     TessellationConstants tessConsts;
     tessConsts.TessellationFactor = GetAdaptiveTessellationFactor();
-    tessConsts.DisplacementStrength = 0.8f;
+    tessConsts.DisplacementStrength = 0.02f;
     tessConsts.TessMinDist = 0.0f;
     tessConsts.TessMaxDist = 30.0f;
     memcpy(m_mappedTessellationData, &tessConsts, sizeof(tessConsts));
@@ -1218,7 +1261,7 @@ bool DirectXApp::Initialize()
 
             // ========== ЗАГРУЗКА ТЕКСТУР ==========
 
-            // Текстура 0: Основная текстура (diffuse/albedo)
+            // Текстура 0: Основная текстура (diffuse/albedo) - register t0
             TextureData texData0 = LoadTextureWIC(workingDir + L"texture_first.png");
             if (!texData0.valid)
                 texData0 = LoadTextureWIC(workingDir + L"texture_first.jpg");
@@ -1227,92 +1270,37 @@ bool DirectXApp::Initialize()
                 UploadTexture(texData0, 0, false);
                 MessageBoxA(m_windowHandle, "Main texture loaded!", "Info", MB_OK);
             }
-            else
-            {
-                // Создаем текстуру-заглушку (серая)
-                TextureData dummy;
-                dummy.width = 2;
-                dummy.height = 2;
-                dummy.valid = true;
-                dummy.pixels.resize(2 * 2 * 4);
-                for (size_t i = 0; i < dummy.pixels.size(); i += 4)
-                {
-                    dummy.pixels[i + 0] = 128;
-                    dummy.pixels[i + 1] = 128;
-                    dummy.pixels[i + 2] = 128;
-                    dummy.pixels[i + 3] = 255;
-                }
-                UploadTexture(dummy, 0, false);
-                MessageBoxA(m_windowHandle, "Using dummy main texture", "Warning", MB_OK);
-            }
 
-            // Текстура 1: Карта нормалей (normal map)
+            // Текстура 1: Карта нормалей (normal map) - register t1
             TextureData normalData = LoadTextureWIC(workingDir + L"normal.png");
             if (!normalData.valid)
                 normalData = LoadTextureWIC(workingDir + L"normal.jpg");
             if (normalData.valid)
             {
-                UploadTexture(normalData, 1, true); // Слот 1 для карты нормалей
+                UploadTexture(normalData, 1, true);
                 m_useNormalMap = true;
                 MessageBoxA(m_windowHandle, "Normal map loaded!", "Info", MB_OK);
             }
-            else
-            {
-                // Создаем фиктивную карту нормалей (RGB 128,128,255 -> нормаль 0,0,1)
-                TextureData dummyNormal;
-                dummyNormal.width = 2;
-                dummyNormal.height = 2;
-                dummyNormal.valid = true;
-                dummyNormal.pixels.resize(2 * 2 * 4);
-                for (size_t i = 0; i < dummyNormal.pixels.size(); i += 4)
-                {
-                    dummyNormal.pixels[i + 0] = 128; // R = 0.5
-                    dummyNormal.pixels[i + 1] = 128; // G = 0.5
-                    dummyNormal.pixels[i + 2] = 255; // B = 1.0
-                    dummyNormal.pixels[i + 3] = 255;
-                }
-                UploadTexture(dummyNormal, 1, true);
-                m_useNormalMap = false;
-                MessageBoxA(m_windowHandle, "Using dummy normal map", "Warning", MB_OK);
-            }
 
-            // Текстура 2: Карта смещения (displacement map)
+            // Текстура 2: Карта смещения (displacement map) - register t2
             TextureData displacementData = LoadTextureWIC(workingDir + L"displacement.png");
             if (!displacementData.valid)
                 displacementData = LoadTextureWIC(workingDir + L"displacement.jpg");
             if (displacementData.valid)
             {
-                UploadTexture(displacementData, 2, false); // Слот 2 для карты смещения
+                UploadTexture(displacementData, 2, false);
                 m_useDisplacement = true;
                 MessageBoxA(m_windowHandle, "Displacement map loaded!", "Info", MB_OK);
             }
-            else
-            {
-                // Создаем фиктивную карту смещения (серый 128 -> нет смещения)
-                TextureData dummyDisplacement;
-                dummyDisplacement.width = 2;
-                dummyDisplacement.height = 2;
-                dummyDisplacement.valid = true;
-                dummyDisplacement.pixels.resize(2 * 2 * 4);
-                for (size_t i = 0; i < dummyDisplacement.pixels.size(); i += 4)
-                {
-                    dummyDisplacement.pixels[i + 0] = 128; // R = 0.5 (нет смещения)
-                    dummyDisplacement.pixels[i + 1] = 128;
-                    dummyDisplacement.pixels[i + 2] = 128;
-                    dummyDisplacement.pixels[i + 3] = 255;
-                }
-                UploadTexture(dummyDisplacement, 2, false);
-                m_useDisplacement = false;
-                MessageBoxA(m_windowHandle, "Using dummy displacement map", "Warning", MB_OK);
-            }
 
-            // Текстура 3: Вторая текстура (опционально, для слота 3)
+            // Текстура 3: Вторая текстура (опционально) - register t3
             TextureData texData3 = LoadTextureWIC(workingDir + L"texture_second.png");
             if (!texData3.valid)
                 texData3 = LoadTextureWIC(workingDir + L"texture_second.jpg");
             if (texData3.valid)
             {
                 UploadTexture(texData3, 3, false);
+                MessageBoxA(m_windowHandle, "Second texture loaded!", "Info", MB_OK);
             }
         }
 
@@ -1326,8 +1314,8 @@ bool DirectXApp::Initialize()
 
         // Выводим итоговую информацию
         std::string info = "Initialization complete!\n";
-        info += "Normal map: " + std::string(m_useNormalMap ? "YES" : "NO (using dummy)") + "\n";
-        info += "Displacement: " + std::string(m_useDisplacement ? "YES" : "NO (using dummy)") + "\n";
+        info += "Normal map: " + std::string(m_useNormalMap ? "YES" : "NO") + "\n";
+        info += "Displacement: " + std::string(m_useDisplacement ? "YES" : "NO") + "\n";
         info += "Tessellation factor: " + std::to_string(GetAdaptiveTessellationFactor()) + "\n";
         MessageBoxA(m_windowHandle, info.c_str(), "Initialization Info", MB_OK);
     }

@@ -503,7 +503,7 @@ TessHS_CONST TessHSConst(InputPatch<TessHS_OUT, 3> ip, uint pid : SV_PrimitiveID
 
 // Hull Shader - контрольные точки
 [domain("tri")]
-[partitioning("integer")]
+[partitioning("fractional_odd")]
 [outputtopology("triangle_cw")]
 [outputcontrolpoints(3)]
 [patchconstantfunc("TessHSConst")]
@@ -512,51 +512,46 @@ TessHS_OUT TessHS(InputPatch<TessHS_OUT, 3> ip, uint id : SV_OutputControlPointI
     return ip[id];
 }
 
-// Domain Shader (с добавленным визуальным смещением для проверки)
-// Domain Shader
 [domain("tri")]
 TessDS_Output TessDS(TessHS_CONST input, float3 bary : SV_DomainLocation, const OutputPatch<TessHS_OUT, 3> patch)
 {
     TessDS_Output output;
     
-    float3 worldPos = bary.x * patch[0].WorldPos +
-                      bary.y * patch[1].WorldPos +
-                      bary.z * patch[2].WorldPos;
+    float3 worldPos = bary.x * patch[0].WorldPos
+                    + bary.y * patch[1].WorldPos
+                    + bary.z * patch[2].WorldPos;
     
-    float3 normal = bary.x * patch[0].Normal +
-                    bary.y * patch[1].Normal +
-                    bary.z * patch[2].Normal;
+    float3 normal = bary.x * patch[0].Normal
+                  + bary.y * patch[1].Normal
+                  + bary.z * patch[2].Normal;
+    
+    float2 tex = bary.x * patch[0].Tex
+               + bary.y * patch[1].Tex
+               + bary.z * patch[2].Tex;
+    
     normal = normalize(normal);
     
-    // ДОБАВИТЬ: интерполяция tangent и binormal
-    float3 tangent = bary.x * patch[0].Tangent +
-                     bary.y * patch[1].Tangent +
-                     bary.z * patch[2].Tangent;
-    tangent = normalize(tangent);
+    // КЛЮЧЕВОЕ: зажимаем UV в допустимый диапазон
+    float2 clampedTex = clamp(tex, 0.001f, 0.999f);
     
-    float3 binormal = bary.x * patch[0].Binormal +
-                      bary.y * patch[1].Binormal +
-                      bary.z * patch[2].Binormal;
-    binormal = normalize(binormal);
+    // Используем SampleLevel с LOD = 0
+    float height = gDisplacementMap.SampleLevel(gSampler, clampedTex, 0).r;
     
-    float2 tex = bary.x * patch[0].Tex +
-                 bary.y * patch[1].Tex +
-                 bary.z * patch[2].Tex;
+    // Используем очень маленькое смещение для теста
+  //  float displacement = (height - 0.5f) * 0.01f; // Временно 0.01
     
-    // УБРАТЬ визуальное смещение и добавить displacement (если нужно)
-    // worldPos += normal * 0.02f * TessellationFactor; // УДАЛИТЬ
+    // Временно используем ВОЛНУ вместо текстуры для проверки
+     float wave = sin(worldPos.x * 0.5f) * 0.05f;
+     float displacement = wave;
     
-    // МОЖНО ДОБАВИТЬ displacement если нужно
-    // float height = gDisplacementMap.Sample(gSampler, tex).r;
-    // float displacement = (height - 0.5f) * DisplacementStrength;
-    // worldPos += normal * displacement;
+    worldPos += normal * displacement;
     
-    float4 viewPos = mul(float4(worldPos, 1), View);
+    float4 viewPos = mul(float4(worldPos, 1.0f), View);
     output.PosH = mul(viewPos, Proj);
     output.WorldPos = worldPos;
     output.NormalW = normal;
-    output.TangentW = tangent; // ДОБАВИТЬ
-    output.BinormalW = binormal; // ДОБАВИТЬ
+    output.TangentW = normalize(bary.x * patch[0].Tangent + bary.y * patch[1].Tangent + bary.z * patch[2].Tangent);
+    output.BinormalW = normalize(bary.x * patch[0].Binormal + bary.y * patch[1].Binormal + bary.z * patch[2].Binormal);
     output.UV = tex;
     output.ViewDepth = viewPos.z;
     
@@ -569,6 +564,14 @@ GBufferOutput TessGeometryPSMain(TessGeometryPSInput input)
     GBufferOutput o;
     
     float4 albedo = gMainTexture.Sample(gSampler, input.UV);
+    
+    // ===== ВИЗУАЛИЗАЦИЯ HEIGHT =====
+    float height = gDisplacementMap.Sample(gSampler, input.UV).r;
+    
+    // Временная визуализация: показываем height вместо albedo
+    // Черный = 0, Белый = 1, Серый = 0.5
+    albedo = float4(height, height, height, 1.0f);
+    // ================================
     
     // ДОБАВИТЬ: normal mapping для deferred
     float3 normalMap = gNormalMap.Sample(gSampler, input.UV).rgb;
