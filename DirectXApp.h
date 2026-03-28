@@ -209,10 +209,41 @@ private:
         float TessMaxDist;
         float Padding[4];
     };
+
+    // В private секцию добавить:
+    ComPtr<ID3D12Resource> m_waterVertexBuffer;
+    ComPtr<ID3D12Resource> m_waterIndexBuffer;
+    D3D12_VERTEX_BUFFER_VIEW m_waterVertexBufferView = {};
+    D3D12_INDEX_BUFFER_VIEW m_waterIndexBufferView = {};
+    UINT m_waterIndexCount = 0;
+    DirectX::XMMATRIX m_waterWorldMatrix;
+    float m_waterTime = 0.0f;
+
+    void CreateWaterPlane();
+    void CreateWaterPipelineState();
+    ComPtr<ID3D12PipelineState> m_waterPipelineState;
     // Tessellation constant buffer
     ComPtr<ID3D12Resource> m_tessellationCB;
     TessellationConstants* m_mappedTessellationData = nullptr;
 
     // Rendering mode
     bool m_useDeferredRendering = true;
+
+    // В private секцию добавить:
+
+    void CreateWaterConstantBuffer();
+
+    struct WaterConstantData
+    {
+        float Time;
+        float WaveStrength;
+        float WaveSpeed;
+        float WaveFrequency;
+        float Padding[4];
+    };
+    ComPtr<ID3D12Resource> m_waterConstantBuffer;
+    WaterConstantData* m_mappedWaterConstantData = nullptr;
+    // В private секцию добавить:
+    ComPtr<ID3D12PipelineState> m_waterTessPipeline;
+    void CreateWaterTessellationPipeline();
 };

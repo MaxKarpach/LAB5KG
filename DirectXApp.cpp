@@ -185,7 +185,6 @@ ComPtr<ID3DBlob> DirectXApp::CompileShaderFile(const std::wstring& filePath,
 
 void DirectXApp::CreateRootSignature()
 {
-    // Изменяем количество дескрипторов с 1 на 3 (main, normal, displacement)
     D3D12_DESCRIPTOR_RANGE srvRanges[3] = {};
 
     // SRV для основной текстуры (t0)
@@ -209,7 +208,7 @@ void DirectXApp::CreateRootSignature()
     srvRanges[2].RegisterSpace = 0;
     srvRanges[2].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER rootParams[3] = {};
+    D3D12_ROOT_PARAMETER rootParams[4] = {};
 
     // Слот 0: Константный буфер объекта (b0)
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
@@ -217,9 +216,9 @@ void DirectXApp::CreateRootSignature()
     rootParams[0].Descriptor.RegisterSpace = 0;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    // Слот 1: Дескрипторная таблица для текстур (3 текстуры)
+    // Слот 1: Дескрипторная таблица для текстур
     rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    rootParams[1].DescriptorTable.NumDescriptorRanges = 3;  // Было 1, стало 3
+    rootParams[1].DescriptorTable.NumDescriptorRanges = 3;
     rootParams[1].DescriptorTable.pDescriptorRanges = srvRanges;
     rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
@@ -228,6 +227,12 @@ void DirectXApp::CreateRootSignature()
     rootParams[2].Descriptor.ShaderRegister = 2;
     rootParams[2].Descriptor.RegisterSpace = 0;
     rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    // Слот 3: Константный буфер воды (b3)
+    rootParams[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rootParams[3].Descriptor.ShaderRegister = 3;
+    rootParams[3].Descriptor.RegisterSpace = 0;
+    rootParams[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;  // <
 
     D3D12_STATIC_SAMPLER_DESC sampler = {};
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -245,7 +250,7 @@ void DirectXApp::CreateRootSignature()
     sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_ROOT_SIGNATURE_DESC desc = {};
-    desc.NumParameters = 3;  // Было 2, стало 3
+    desc.NumParameters = 4;
     desc.pParameters = rootParams;
     desc.NumStaticSamplers = 1;
     desc.pStaticSamplers = &sampler;
@@ -957,18 +962,16 @@ void DirectXApp::UpdateLightingConstants()
 
     memcpy(m_deferredLightCBMappedData, &cb, sizeof(cb));
 }
-
+ 
 void DirectXApp::Update(float deltaTime)
 {
     // Обновляем камеру
     if (m_inputDevice)
         m_camera.Update(deltaTime, *m_inputDevice);
 
-    // Кулдаун
+    // Кулдаун стрельбы
     if (m_shootCooldown > 0.0f)
-    {
         m_shootCooldown -= deltaTime;
-    }
 
     // Стрельба по пробелу
     if (m_inputDevice && m_inputDevice->IsKeyDown(VK_SPACE) && m_shootCooldown <= 0.0f)
@@ -977,30 +980,40 @@ void DirectXApp::Update(float deltaTime)
         m_shootCooldown = SHOOT_COOLDOWN_TIME;
     }
 
+    // Обновляем время воды для анимации
+    m_waterTime += deltaTime;
+    if (m_waterTime > 1000.0f) m_waterTime -= 1000.0f;
 
-    // Модель не вращается
+    if (m_mappedWaterConstantData)
+    {
+        m_mappedWaterConstantData->Time = m_waterTime;
+        m_mappedWaterConstantData->WaveStrength = 0.6f;
+        m_mappedWaterConstantData->WaveSpeed = 2.5f;
+        m_mappedWaterConstantData->WaveFrequency = 1.5f;
+    }
+
+    // Матрица модели
     float scale = 0.1f;
     DirectX::XMMATRIX scaleMatrix = DirectX::XMMatrixScaling(scale, scale, scale);
     DirectX::XMMATRIX rotationMatrix = DirectX::XMMatrixRotationY(0.0f);
     DirectX::XMMATRIX worldMatrix = scaleMatrix * rotationMatrix;
 
-    // Получаем матрицы камеры
-    float aspectRatio = (m_screenHeight > 0) ?
-        static_cast<float>(m_screenWidth) / m_screenHeight : 1.0f;
-
+    // Матрицы камеры
+    float aspectRatio = (m_screenHeight > 0) ? static_cast<float>(m_screenWidth) / m_screenHeight : 1.0f;
     DirectX::XMMATRIX viewMatrix = m_camera.GetViewMatrix();
     DirectX::XMMATRIX projMatrix = m_camera.GetProjectionMatrix(aspectRatio);
 
-    // Позиция камеры для освещения
+    // Позиция камеры
     DirectX::XMFLOAT3 cameraPos = m_camera.GetPosition();
 
+    // Константный буфер
     ConstantBufferData constantData = {};
     constantData.World = DirectX::XMMatrixTranspose(worldMatrix);
     constantData.View = DirectX::XMMatrixTranspose(viewMatrix);
     constantData.Proj = DirectX::XMMatrixTranspose(projMatrix);
     constantData.LightPos = DirectX::XMFLOAT4(2.0f, 5.0f, -2.0f, 0.0f);
     constantData.LightColor = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
-    constantData.CameraPos = DirectX::XMFLOAT4(cameraPos.x, cameraPos.y, cameraPos.z, 1.0f);
+    constantData.CameraPos = DirectX::XMFLOAT4(cameraPos.x, cameraPos.y, cameraPos.z, m_waterTime);
     constantData.Tiling = DirectX::XMFLOAT2(1.0f, 1.0f);
     constantData.UVOffset = DirectX::XMFLOAT2(0.0f, 0.0f);
 
@@ -1013,7 +1026,61 @@ void DirectXApp::RenderGeometryPass()
 {
     D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_dsvHeap->GetCPUDescriptorHandleForHeapStart();
 
-    // Обновляем константы тесселяции
+    // Настраиваем viewport
+    D3D12_VIEWPORT viewport = {};
+    viewport.Width = static_cast<float>(m_screenWidth);
+    viewport.Height = static_cast<float>(m_screenHeight);
+    viewport.MaxDepth = 1.0f;
+    D3D12_RECT scissorRect = { 0, 0, m_screenWidth, m_screenHeight };
+
+    m_cmdList->RSSetViewports(1, &viewport);
+    m_cmdList->RSSetScissorRects(1, &scissorRect);
+
+    // Очищаем depth buffer
+    m_cmdList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+
+    // Начинаем geometry pass - очищает все RTV GBuffer и устанавливает их
+    m_gbuffer->BeginGeometryPass(m_cmdList.Get(), dsvHandle);
+
+    ID3D12DescriptorHeap* heaps[] = { m_srvHeap.Get() };
+    m_cmdList->SetDescriptorHeaps(1, heaps);
+    m_cmdList->SetGraphicsRootSignature(m_rootSignature.Get());
+    m_cmdList->SetPipelineState(m_waterTessPipeline.Get());
+
+    // Сохраняем оригинальные данные
+    ConstantBufferData originalData;
+    memcpy(&originalData, m_mappedConstantData, sizeof(ConstantBufferData));
+
+    // Обновляем World матрицу для воды
+    ConstantBufferData waterData = originalData;
+    waterData.World = DirectX::XMMatrixTranspose(m_waterWorldMatrix);
+    memcpy(m_mappedConstantData, &waterData, sizeof(ConstantBufferData));
+
+    // Устанавливаем константные буферы
+    // Слот 0: Константный буфер объекта (b0)
+    m_cmdList->SetGraphicsRootConstantBufferView(0, m_constantBuffer->GetGPUVirtualAddress());
+
+    // Слот 1: Дескрипторная таблица для текстур
+    m_cmdList->SetGraphicsRootDescriptorTable(1, m_srvHeap->GetGPUDescriptorHandleForHeapStart());
+
+    // Слот 2: Константный буфер тесселяции (b2)
+    m_cmdList->SetGraphicsRootConstantBufferView(2, m_tessellationCB->GetGPUVirtualAddress());
+
+    // Слот 3: Константный буфер воды (b3) - WaterCB
+    if (m_waterConstantBuffer)
+    {
+        m_cmdList->SetGraphicsRootConstantBufferView(3, m_waterConstantBuffer->GetGPUVirtualAddress());
+    }
+
+    // Для тесселяции используем PATCHLIST
+    m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
+    m_cmdList->IASetVertexBuffers(0, 1, &m_waterVertexBufferView);
+    m_cmdList->IASetIndexBuffer(&m_waterIndexBufferView);
+    m_cmdList->DrawIndexedInstanced(m_waterIndexCount, 1, 0, 0, 0);
+
+    // Восстанавливаем World матрицу для модели
+    memcpy(m_mappedConstantData, &originalData, sizeof(ConstantBufferData));
+
     TessellationConstants tessConsts;
     tessConsts.TessellationFactor = GetAdaptiveTessellationFactor();
     tessConsts.DisplacementStrength = 0.02f;
@@ -1021,6 +1088,7 @@ void DirectXApp::RenderGeometryPass()
     tessConsts.TessMaxDist = 30.0f;
     memcpy(m_mappedTessellationData, &tessConsts, sizeof(tessConsts));
 
+    // Рендерим модель с тесселяцией
     m_renderingSystem->RenderGeometryPass(
         m_cmdList.Get(),
         m_rootSignature.Get(),
@@ -1030,9 +1098,12 @@ void DirectXApp::RenderGeometryPass()
         m_indexCount,
         m_srvHeap.Get(),
         m_constantBuffer.Get(),
-        m_tessellationCB.Get(),  // ПЕРЕДАЕМ КОНСТАНТНЫЙ БУФЕР ТЕССЕЛЯЦИИ
+        m_tessellationCB.Get(),
         m_gbuffer.get(),
         dsvHandle);
+
+    // Завершаем geometry pass
+    m_gbuffer->EndGeometryPass(m_cmdList.Get());
 }
 
 void DirectXApp::RenderLightingPass()
@@ -1103,6 +1174,7 @@ void DirectXApp::BuildCommandList()
     D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
     D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_dsvHeap->GetCPUDescriptorHandleForHeapStart();
 
+    // Transition
     D3D12_RESOURCE_BARRIER barrier = {};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     barrier.Transition.pResource = m_backBuffers[m_currentBackBuffer].Get();
@@ -1111,30 +1183,33 @@ void DirectXApp::BuildCommandList()
     barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     m_cmdList->ResourceBarrier(1, &barrier);
 
-    // Обновляем константы тесселяции
-    TessellationConstants tessConsts;
-    tessConsts.TessellationFactor = GetAdaptiveTessellationFactor();
-    tessConsts.DisplacementStrength = 0.02f;
-    tessConsts.TessMinDist = 0.0f;
-    tessConsts.TessMaxDist = 30.0f;
-    memcpy(m_mappedTessellationData, &tessConsts, sizeof(tessConsts));
+    // Clear
+    const float clearColor[] = { 0.1f, 0.1f, 0.2f, 1.0f };
+    m_cmdList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+    m_cmdList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
-    m_renderingSystem->RenderForward(
-        m_cmdList.Get(),
-        m_rootSignature.Get(),
-        m_tessPipeline.Get(),
-        m_vertexBufferView,
-        m_indexBufferView,
-        m_indexCount,
-        m_srvHeap.Get(),
-        m_constantBuffer.Get(),
-        m_tessellationCB.Get(),  // ПЕРЕДАЕМ КОНСТАНТНЫЙ БУФЕР ТЕССЕЛЯЦИИ
-        rtvHandle,
-        dsvHandle,
-        m_screenWidth, m_screenHeight,
-        m_currentBackBuffer,
-        m_rtvDescriptorSize);
+    // Set descriptors
+    ID3D12DescriptorHeap* descriptorHeaps[] = { m_srvHeap.Get() };
+    m_cmdList->SetDescriptorHeaps(1, descriptorHeaps);
+    m_cmdList->SetGraphicsRootSignature(m_rootSignature.Get());
 
+    // Set constant buffers
+    m_cmdList->SetGraphicsRootConstantBufferView(0, m_constantBuffer->GetGPUVirtualAddress());
+
+    // Set texture table
+    D3D12_GPU_DESCRIPTOR_HANDLE srvHandle = m_srvHeap->GetGPUDescriptorHandleForHeapStart();
+    m_cmdList->SetGraphicsRootDescriptorTable(1, srvHandle);
+
+    // Set tessellation constant buffer
+    m_cmdList->SetGraphicsRootConstantBufferView(2, m_tessellationCB->GetGPUVirtualAddress());
+
+    // ========== РЕНДЕРИМ МОДЕЛЬ С ТЕССЕЛЯЦИЕЙ ==========
+    m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
+    m_cmdList->IASetVertexBuffers(0, 1, &m_vertexBufferView);
+    m_cmdList->IASetIndexBuffer(&m_indexBufferView);
+    m_cmdList->DrawIndexedInstanced(m_indexCount, 1, 0, 0, 0);
+
+    // Transition back
     barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
     barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
     m_cmdList->ResourceBarrier(1, &barrier);
@@ -1232,6 +1307,7 @@ bool DirectXApp::Initialize()
         CreateLightingConstantBuffer();
         CreatePipelineState();
         CreateDeferredPipelines();
+        CreateWaterTessellationPipeline();
 
         CreateTessellationPipeline();
         CreateTessellationGeometryPipeline();
@@ -1303,6 +1379,9 @@ bool DirectXApp::Initialize()
                 MessageBoxA(m_windowHandle, "Second texture loaded!", "Info", MB_OK);
             }
         }
+        CreateWaterPlane();
+        CreateWaterPipelineState();
+        CreateWaterConstantBuffer();
 
         ThrowIfFailed(m_cmdList->Close());
         ID3D12CommandList* commandLists[] = { m_cmdList.Get() };
@@ -1631,10 +1710,8 @@ void DirectXApp::CreateTessellationConstantBuffer()
 
 float DirectXApp::GetAdaptiveTessellationFactor()
 {
-    // Центр модели
     DirectX::XMFLOAT3 modelCenter = DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f);
 
-    // Позиция камеры
     DirectX::XMFLOAT3 cameraPos = m_camera.GetPosition();
 
     // Расстояние
@@ -1643,9 +1720,8 @@ float DirectXApp::GetAdaptiveTessellationFactor()
     float dz = cameraPos.z - modelCenter.z;
     float distance = sqrt(dx * dx + dy * dy + dz * dz);
 
-    // Параметры
-    float maxTessFactor = 16.0f;   // близко
-    float minTessFactor = 1.0f;    // далеко
+    float maxTessFactor = 16.0f; 
+    float minTessFactor = 1.0f;   
     float maxDistance = 50.0f;
     float minDistance = 5.0f;
 
@@ -1656,4 +1732,224 @@ float DirectXApp::GetAdaptiveTessellationFactor()
 
     float factor = maxTessFactor * (1.0f - t) + minTessFactor * t;
     return factor;
+}
+
+void DirectXApp::CreateWaterPlane()
+{
+    const int gridSize = 500;
+    const float halfSize = 300.0f;
+    const float step = (halfSize * 2.0f) / gridSize;
+
+    std::vector<Vertex> vertices;
+    std::vector<UINT> indices;
+
+    for (int z = 0; z <= gridSize; ++z)
+    {
+        float zPos = -halfSize + z * step;
+        for (int x = 0; x <= gridSize; ++x)
+        {
+            float xPos = -halfSize + x * step;
+
+            Vertex v;
+            v.Position = DirectX::XMFLOAT3(xPos, 0.0f, zPos);
+            v.Normal = DirectX::XMFLOAT3(0.0f, 1.0f, 0.0f);
+            v.Color = DirectX::XMFLOAT4(0.2f, 0.5f, 0.8f, 0.8f);
+            v.TexCoord = DirectX::XMFLOAT2((float)x / gridSize, (float)z / gridSize);
+            v.Tangent = DirectX::XMFLOAT3(1.0f, 0.0f, 0.0f);
+            v.Binormal = DirectX::XMFLOAT3(0.0f, 0.0f, 1.0f);
+
+            vertices.push_back(v);
+        }
+    }
+
+    for (int z = 0; z < gridSize; ++z)
+    {
+        for (int x = 0; x < gridSize; ++x)
+        {
+            int topLeft = z * (gridSize + 1) + x;
+            int topRight = topLeft + 1;
+            int bottomLeft = (z + 1) * (gridSize + 1) + x;
+            int bottomRight = bottomLeft + 1;
+
+            indices.push_back(topLeft);
+            indices.push_back(bottomLeft);
+            indices.push_back(topRight);
+
+            indices.push_back(topRight);
+            indices.push_back(bottomLeft);
+            indices.push_back(bottomRight);
+        }
+    }
+
+    m_waterIndexCount = static_cast<UINT>(indices.size());
+
+    UINT64 vertexBufferSize = vertices.size() * sizeof(Vertex);
+    UINT64 indexBufferSize = indices.size() * sizeof(UINT);
+
+    CreateUploadBuffer(vertices.data(), vertexBufferSize, m_waterVertexBuffer);
+    CreateUploadBuffer(indices.data(), indexBufferSize, m_waterIndexBuffer);
+
+    m_waterVertexBufferView.BufferLocation = m_waterVertexBuffer->GetGPUVirtualAddress();
+    m_waterVertexBufferView.SizeInBytes = static_cast<UINT>(vertexBufferSize);
+    m_waterVertexBufferView.StrideInBytes = sizeof(Vertex);
+
+    m_waterIndexBufferView.BufferLocation = m_waterIndexBuffer->GetGPUVirtualAddress();
+    m_waterIndexBufferView.SizeInBytes = static_cast<UINT>(indexBufferSize);
+    m_waterIndexBufferView.Format = DXGI_FORMAT_R32_UINT;
+
+    m_waterWorldMatrix = DirectX::XMMatrixTranslation(20.0f, 20.0f, 20.0f);
+}
+
+void DirectXApp::CreateWaterPipelineState()
+{
+    wchar_t exePath[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    std::wstring filePath(exePath);
+    filePath = filePath.substr(0, filePath.find_last_of(L"\\/") + 1) + L"shaders.hlsl";
+
+    auto vs = CompileShaderFile(filePath, "WaterVSMain", "vs_5_0");
+    auto ps = CompileShaderFile(filePath, "WaterPSMain", "ps_5_0");
+
+    D3D12_INPUT_ELEMENT_DESC inputLayout[] =
+    {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 48, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "BINORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 60, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+    };
+
+    D3D12_RASTERIZER_DESC rasterizerDesc = {};
+    rasterizerDesc.FillMode = D3D12_FILL_MODE_SOLID;
+    rasterizerDesc.CullMode = D3D12_CULL_MODE_NONE;
+    rasterizerDesc.DepthClipEnable = TRUE;
+
+    D3D12_DEPTH_STENCIL_DESC depthStencilDesc = {};
+    depthStencilDesc.DepthEnable = TRUE;
+    depthStencilDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    depthStencilDesc.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+
+    D3D12_BLEND_DESC blendDesc = {};
+    for (UINT i = 0; i < 4; ++i)
+    {
+        blendDesc.RenderTarget[i].BlendEnable = FALSE;
+        blendDesc.RenderTarget[i].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    }
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+    psoDesc.InputLayout = { inputLayout, _countof(inputLayout) };
+    psoDesc.pRootSignature = m_rootSignature.Get();
+    psoDesc.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
+    psoDesc.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
+    psoDesc.RasterizerState = rasterizerDesc;
+    psoDesc.BlendState = blendDesc;
+    psoDesc.DepthStencilState = depthStencilDesc;
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets = GBuffer::TargetCount;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.RTVFormats[1] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    psoDesc.RTVFormats[2] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    psoDesc.RTVFormats[3] = DXGI_FORMAT_R32_FLOAT;
+    psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+    psoDesc.SampleDesc = { 1, 0 };
+
+    ThrowIfFailed(m_d3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_waterPipelineState)));
+}
+
+void DirectXApp::CreateWaterConstantBuffer()
+{
+    UINT64 bufferSize = (sizeof(WaterConstantData) + 255) & ~255;
+
+    D3D12_HEAP_PROPERTIES heapProps = {};
+    heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+    D3D12_RESOURCE_DESC bufferDesc = {};
+    bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufferDesc.Width = bufferSize;
+    bufferDesc.Height = 1;
+    bufferDesc.DepthOrArraySize = 1;
+    bufferDesc.MipLevels = 1;
+    bufferDesc.SampleDesc = { 1, 0 };
+    bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    ThrowIfFailed(m_d3dDevice->CreateCommittedResource(
+        &heapProps, D3D12_HEAP_FLAG_NONE, &bufferDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&m_waterConstantBuffer)));
+
+    D3D12_RANGE mapRange = { 0, 0 };
+    ThrowIfFailed(m_waterConstantBuffer->Map(0, &mapRange,
+        reinterpret_cast<void**>(&m_mappedWaterConstantData)));
+
+    if (m_mappedWaterConstantData)
+    {
+        m_mappedWaterConstantData->Time = 0.0f;
+        m_mappedWaterConstantData->WaveStrength = 0.4f;
+        m_mappedWaterConstantData->WaveSpeed = 2.0f;
+        m_mappedWaterConstantData->WaveFrequency = 1.2f;
+    }
+}
+
+void DirectXApp::CreateWaterTessellationPipeline()
+{
+    wchar_t exePath[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    std::wstring filePath(exePath);
+    filePath = filePath.substr(0, filePath.find_last_of(L"\\/") + 1) + L"shaders.hlsl";
+
+    auto vs = CompileShaderFile(filePath, "WaterTessVS", "vs_5_0");
+    auto hs = CompileShaderFile(filePath, "WaterTessHS", "hs_5_0");
+    auto ds = CompileShaderFile(filePath, "WaterTessDS", "ds_5_0");
+    auto ps = CompileShaderFile(filePath, "WaterPSMain", "ps_5_0");
+
+    D3D12_INPUT_ELEMENT_DESC layout[] =
+    {
+        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 48, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"BINORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 60, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+    };
+
+    D3D12_RASTERIZER_DESC rasterizerDesc = {};
+    rasterizerDesc.FillMode = D3D12_FILL_MODE_SOLID;
+    rasterizerDesc.CullMode = D3D12_CULL_MODE_NONE;
+    rasterizerDesc.DepthClipEnable = TRUE;
+
+    D3D12_DEPTH_STENCIL_DESC depthStencilDesc = {};
+    depthStencilDesc.DepthEnable = TRUE;
+    depthStencilDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    depthStencilDesc.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+
+    D3D12_BLEND_DESC blendDesc = {};
+    for (UINT i = 0; i < 4; ++i)
+    {
+        blendDesc.RenderTarget[i].BlendEnable = FALSE;
+        blendDesc.RenderTarget[i].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    }
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+    psoDesc.InputLayout = { layout, _countof(layout) };
+    psoDesc.pRootSignature = m_rootSignature.Get();
+    psoDesc.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
+    psoDesc.HS = { hs->GetBufferPointer(), hs->GetBufferSize() };
+    psoDesc.DS = { ds->GetBufferPointer(), ds->GetBufferSize() };
+    psoDesc.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
+    psoDesc.RasterizerState = rasterizerDesc;
+    psoDesc.BlendState = blendDesc;
+    psoDesc.DepthStencilState = depthStencilDesc;
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH;
+    psoDesc.NumRenderTargets = GBuffer::TargetCount;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.RTVFormats[1] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    psoDesc.RTVFormats[2] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    psoDesc.RTVFormats[3] = DXGI_FORMAT_R32_FLOAT;
+    psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+    psoDesc.SampleDesc = { 1, 0 };
+
+    ThrowIfFailed(m_d3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_waterTessPipeline)));
 }

@@ -35,6 +35,15 @@ cbuffer DeferredLightCB : register(b1)
     float4x4 InvProj;
 };
 
+cbuffer WaterCB : register(b3)
+{
+    float WaterTime;
+    float WaveStrength;
+    float WaveSpeed;
+    float WaveFrequency;
+    float Padding[4];
+};
+
 Texture2D gMainTexture : register(t0);
 Texture2D gNormalMap : register(t1); // НОВО: карта нормалей
 Texture2D gDisplacementMap : register(t2); // НОВО: карта смещения
@@ -541,8 +550,8 @@ TessDS_Output TessDS(TessHS_CONST input, float3 bary : SV_DomainLocation, const 
   //  float displacement = (height - 0.5f) * 0.01f; // Временно 0.01
     
     // Временно используем ВОЛНУ вместо текстуры для проверки
-     float wave = sin(worldPos.x * 0.5f) * 0.05f;
-     float displacement = wave;
+    float wave = sin(worldPos.x * 0.5f) * 0.05f;
+    float displacement = wave;
     
     worldPos += normal * displacement;
     
@@ -593,4 +602,247 @@ GBufferOutput TessGeometryPSMain(TessGeometryPSInput input)
     o.Depth = float4(depth, depth, depth, 1.0f);
     
     return o;
+}
+
+struct WaterPSInput
+{
+    float4 PosH : SV_POSITION;
+    float3 WorldPos : TEXCOORD0;
+    float3 NormalW : TEXCOORD1;
+    float2 UV : TEXCOORD2;
+    float ViewDepth : TEXCOORD3;
+};
+
+GBufferOutput WaterPSMain(WaterPSInput input)
+{
+    GBufferOutput o;
+    
+    float4 albedo = float4(0.1f, 0.4f, 0.8f, 0.95f);
+    
+    float2 uv = input.UV * 8.0f;
+    float variation = sin(uv.x * 10.0f + WaterTime) * cos(uv.y * 10.0f);
+    albedo.rgb += variation * 0.1f;
+
+    float3 normal = normalize(input.NormalW);
+    
+    o.AlbedoSpec = albedo;
+    o.WorldPos = float4(input.WorldPos, 1.0f);
+    o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
+    o.Depth = float4(saturate(input.ViewDepth / 100.0f), 0, 0, 1.0f);
+    
+    return o;
+}
+
+struct WaterVSInput
+{
+    float3 Position : POSITION;
+    float3 Normal : NORMAL;
+    float4 Color : COLOR;
+    float2 TexCoord : TEXCOORD;
+    float3 Tangent : TANGENT;
+    float3 Binormal : BINORMAL;
+};
+
+struct WaterVSOutput
+{
+    float4 PosH : SV_POSITION;
+    float3 WorldPos : TEXCOORD0;
+    float3 NormalW : TEXCOORD1;
+    float2 UV : TEXCOORD2;
+    float ViewDepth : TEXCOORD3;
+};
+
+WaterVSOutput WaterVSMain(VSInput input)
+{
+    WaterVSOutput output;
+
+    float3 worldPos = mul(float4(input.Position, 1.0f), World).xyz;
+    
+    float time = WaterTime;
+    float strength = WaveStrength;
+    float speed = WaveSpeed;
+    float freq = WaveFrequency;
+    
+    float wave1 = sin(worldPos.x * freq + time * speed) *
+                  cos(worldPos.z * freq * 0.8f + time * speed * 1.2f);
+    float wave2 = sin(worldPos.x * freq * 2.0f + time * speed * 1.5f) * 0.5f;
+    float wave3 = cos(worldPos.z * freq * 1.5f - time * speed * 1.8f) * 0.3f;
+    float wave4 = sin((worldPos.x * 0.5f + worldPos.z * 0.5f) * freq * 3.0f + time * speed * 2.0f) * 0.2f;
+    
+    float height = (wave1 + wave2 + wave3 + wave4) * strength;
+    worldPos.y = height;
+    
+    float epsilon = 0.1f;
+    float hx1 = sin((worldPos.x + epsilon) * freq + time * speed) *
+                cos(worldPos.z * freq * 0.8f + time * speed * 1.2f);
+    float hx2 = sin((worldPos.x + epsilon) * freq * 2.0f + time * speed * 1.5f) * 0.5f;
+    float hx3 = cos(worldPos.z * freq * 1.5f - time * speed * 1.8f) * 0.3f;
+    float hx4 = sin(((worldPos.x + epsilon) * 0.5f + worldPos.z * 0.5f) * freq * 3.0f + time * speed * 2.0f) * 0.2f;
+    float heightX = (hx1 + hx2 + hx3 + hx4) * strength;
+    
+    float hz1 = sin(worldPos.x * freq + time * speed) *
+                cos((worldPos.z + epsilon) * freq * 0.8f + time * speed * 1.2f);
+    float hz2 = sin(worldPos.x * freq * 2.0f + time * speed * 1.5f) * 0.5f;
+    float hz3 = cos((worldPos.z + epsilon) * freq * 1.5f - time * speed * 1.8f) * 0.3f;
+    float hz4 = sin((worldPos.x * 0.5f + (worldPos.z + epsilon) * 0.5f) * freq * 3.0f + time * speed * 2.0f) * 0.2f;
+    float heightZ = (hz1 + hz2 + hz3 + hz4) * strength;
+    
+    float3 gradient = float3(height - heightX, 0.0f, height - heightZ);
+    float3 normal = normalize(float3(-gradient.x, 1.0f, -gradient.z));
+    
+    float4 viewPos = mul(float4(worldPos, 1.0f), View);
+    output.PosH = mul(viewPos, Proj);
+    output.WorldPos = worldPos;
+    output.NormalW = normal;
+    output.UV = input.TexCoord;
+    output.ViewDepth = viewPos.z;
+    
+    return output;
+}
+// ========== ТЕССЕЛЯЦИЯ ДЛЯ ВОДЫ ==========
+
+struct WaterTessVS_IN
+{
+    float3 Pos : POSITION;
+    float3 Normal : NORMAL;
+    float4 Color : COLOR;
+    float2 Tex : TEXCOORD;
+    float3 Tangent : TANGENT;
+    float3 Binormal : BINORMAL;
+};
+
+struct WaterTessHS_OUT
+{
+    float3 WorldPos : WORLDPOS;
+    float3 Normal : NORMAL;
+    float4 Color : COLOR;
+    float2 Tex : TEXCOORD;
+    float3 Tangent : TANGENT;
+    float3 Binormal : BINORMAL;
+};
+
+struct WaterTessHS_CONST
+{
+    float edges[3] : SV_TessFactor;
+    float inside : SV_InsideTessFactor;
+};
+
+struct WaterTessDS_Output
+{
+    float4 PosH : SV_POSITION;
+    float3 WorldPos : TEXCOORD0;
+    float3 NormalW : TEXCOORD1;
+    float2 UV : TEXCOORD2;
+    float ViewDepth : TEXCOORD3;
+};
+
+WaterTessHS_OUT WaterTessVS(VS_IN input)
+{
+    WaterTessHS_OUT output;
+    output.WorldPos = mul(float4(input.Pos, 1), World).xyz;
+    output.Normal = normalize(mul(float4(input.Normal, 0), World).xyz);
+    output.Color = float4(0, 0, 1, 1);
+    output.Tex = input.Tex;
+    output.Tangent = input.Tangent;
+    output.Binormal = input.Binormal;
+    return output;
+}
+
+WaterTessHS_CONST WaterTessHSConst(InputPatch<WaterTessHS_OUT, 3> ip, uint pid : SV_PrimitiveID)
+{
+    WaterTessHS_CONST output;
+    
+    float3 center = (ip[0].WorldPos + ip[1].WorldPos + ip[2].WorldPos) / 3.0f;
+    float dist = length(center - CameraPos.xyz);
+   
+    float maxTess = 48.0f;
+    float minTess = 8.0f;
+    float maxDist = 50.0f;
+    float minDist = 5.0f;
+    
+    float t = saturate((dist - minDist) / (maxDist - minDist));
+    float factor = maxTess * (1.0f - t) + minTess * t;
+    
+    output.edges[0] = factor;
+    output.edges[1] = factor;
+    output.edges[2] = factor;
+    output.inside = factor;
+    
+    return output;
+}
+
+[domain("tri")]
+[partitioning("integer")]
+[outputtopology("triangle_cw")]
+[outputcontrolpoints(3)]
+[patchconstantfunc("WaterTessHSConst")]
+WaterTessHS_OUT WaterTessHS(InputPatch<WaterTessHS_OUT, 3> ip, uint id : SV_OutputControlPointID)
+{
+    return ip[id];
+}
+
+[domain("tri")]
+WaterTessDS_Output WaterTessDS(WaterTessHS_CONST input, float3 bary : SV_DomainLocation, const OutputPatch<WaterTessHS_OUT, 3> patch)
+{
+    WaterTessDS_Output output;
+    
+    float3 worldPos = bary.x * patch[0].WorldPos +
+                      bary.y * patch[1].WorldPos +
+                      bary.z * patch[2].WorldPos;
+    
+    float3 normal = bary.x * patch[0].Normal +
+                    bary.y * patch[1].Normal +
+                    bary.z * patch[2].Normal;
+    
+    float2 tex = bary.x * patch[0].Tex +
+                 bary.y * patch[1].Tex +
+                 bary.z * patch[2].Tex;
+    
+    normal = normalize(normal);
+    
+    float time = WaterTime;
+    float strength = WaveStrength;
+    float speed = WaveSpeed;
+    float freq = WaveFrequency;
+    
+    if (strength < 0.01f)
+        strength = 0.6f;
+    if (speed < 0.01f)
+        speed = 2.5f;
+    if (freq < 0.01f)
+        freq = 1.5f;
+    
+    float wave1 = sin(worldPos.x * freq + time * speed) *
+                  cos(worldPos.z * freq * 0.8f + time * speed * 1.2f);
+    float wave2 = sin(worldPos.x * freq * 2.0f + time * speed * 1.5f) * 0.5f;
+    float wave3 = cos(worldPos.z * freq * 1.5f - time * speed * 1.8f) * 0.4f;
+    float wave4 = sin((worldPos.x + worldPos.z) * freq * 2.2f + time * speed * 2.2f) * 0.3f;
+    
+    float height = (wave1 + wave2 + wave3 + wave4) * strength;
+    worldPos.y = height;
+    
+    float epsilon = 0.1f;
+    float hx1 = sin((worldPos.x + epsilon) * freq + time * speed) *
+                cos(worldPos.z * freq * 0.8f + time * speed * 1.2f);
+    float hx2 = sin((worldPos.x + epsilon) * freq * 2.0f + time * speed * 1.5f) * 0.5f;
+    float hx3 = cos(worldPos.z * freq * 1.5f - time * speed * 1.8f) * 0.4f;
+    float heightX = (hx1 + hx2 + hx3) * strength;
+    
+    float hz1 = sin(worldPos.x * freq + time * speed) *
+                cos((worldPos.z + epsilon) * freq * 0.8f + time * speed * 1.2f);
+    float hz2 = sin(worldPos.x * freq * 2.0f + time * speed * 1.5f) * 0.5f;
+    float hz3 = cos((worldPos.z + epsilon) * freq * 1.5f - time * speed * 1.8f) * 0.4f;
+    float heightZ = (hz1 + hz2 + hz3) * strength;
+    
+    float3 gradient = float3(height - heightX, 0.0f, height - heightZ);
+    float3 finalNormal = normalize(float3(-gradient.x, 1.0f, -gradient.z));
+    
+    float4 viewPos = mul(float4(worldPos, 1.0f), View);
+    output.PosH = mul(viewPos, Proj);
+    output.WorldPos = worldPos;
+    output.NormalW = finalNormal;
+    output.UV = tex;
+    output.ViewDepth = viewPos.z;
+    
+    return output;
 }

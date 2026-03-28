@@ -10,9 +10,10 @@ struct Vertex
     XMFLOAT3 Normal;
     XMFLOAT4 Color;
     XMFLOAT2 TexCoord;
-    XMFLOAT3 Tangent;     // Добавляем Tangent
-    XMFLOAT3 Binormal;    // Добавляем Binormal
+    XMFLOAT3 Tangent;     // Tangent
+    XMFLOAT3 Binormal;    // Binormal
 };
+
 struct ConstantBufferData
 {
     XMMATRIX World;
@@ -23,6 +24,8 @@ struct ConstantBufferData
     XMFLOAT4 CameraPos;
     XMFLOAT2 Tiling;
     XMFLOAT2 UVOffset;
+    float WaterTime;      // Время для анимации воды
+    float Padding[3];     // Выравнивание до 16 байт
 };
 
 struct GBufferData
@@ -31,7 +34,6 @@ struct GBufferData
     XMFLOAT4 Normal;       // normal
     XMFLOAT4 WorldPos;     // world position
 };
-
 
 struct DynamicLight
 {
