@@ -1,3 +1,4 @@
+
 #pragma once
 #include <d3d12.h>
 #include <dxgi1_6.h>
@@ -5,6 +6,7 @@
 #include <wrl/client.h>
 #include <vector>
 #include <string>
+#include <memory>
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -14,6 +16,10 @@
 #include "Types.h"
 #include "TextureLoader.h"
 #include "ObjLoader.h"
+#include "GBuffer.h"
+#include "RenderingSystem.h"
+#include "Camera.h"
+#include "InputDevice.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -22,15 +28,48 @@ static const UINT BACK_BUFFER_COUNT = 2;
 class DirectXApp
 {
 public:
-    DirectXApp(HWND windowHandle, int windowWidth, int windowHeight);
+    DirectXApp(HWND windowHandle, int windowWidth, int windowHeight, const InputDevice* inputDevice);
     ~DirectXApp();
 
     bool Initialize();
     void Update(float deltaTime);
     void Render();
     void Resize(int newWidth, int newHeight);
+    // В public секцию
+    float ReadDepthAtPixel(float screenX, float screenY);
+    DirectX::XMFLOAT3 ScreenToWorld(float screenX, float screenY, float depth);
+    void CreateTessellationConstantBuffer();
 
 private:
+    // DirectXApp.h - добавить в private секцию:
+    // Добавьте в класс DirectXApp новые поля
+    // В private секцию (у вас уже есть, но убедитесь):
+    ComPtr<ID3D12Resource> m_cubeVertexBuffer;
+    ComPtr<ID3D12Resource> m_cubeIndexBuffer;
+    D3D12_VERTEX_BUFFER_VIEW m_cubeVertexBufferView = {};
+    D3D12_INDEX_BUFFER_VIEW m_cubeIndexBufferView = {};
+    UINT m_cubeIndexCount = 0;
+    DirectX::XMMATRIX m_cubeWorldMatrix;
+
+    void CreateCubeGeometry();
+    void CreateCubePipelineState();
+    ComPtr<ID3D12PipelineState> m_cubePipelineState;
+    ComPtr<ID3D12Resource> m_normalTexture;      // Карта нормалей
+    ComPtr<ID3D12RootSignature> m_tessellationRootSignature;
+    void CreateTessellationRootSignature();
+    ComPtr<ID3D12Resource> m_normalTextureUpload;
+    ComPtr<ID3D12Resource> m_displacementTexture; // Карта смещения
+    ComPtr<ID3D12Resource> m_displacementTextureUpload;
+
+    bool m_useNormalMap = true;
+    bool m_useDisplacement = true;
+    float m_tessellationFactor = 3.0f;
+    // ----- Shooting system -----
+    void Shoot();
+    std::vector<DynamicLight> m_dynamicLights;
+    float m_shootCooldown = 0.0f;
+    static constexpr float SHOOT_COOLDOWN_TIME = 0.2f;
+    static const int MAX_DYNAMIC_LIGHTS = 200;
     // ----- Setup methods -----
     void CreateD3DDevice();
     void CreateCommandQueue();
@@ -44,8 +83,17 @@ private:
     void CreatePipelineState();
     void CreateDefaultGeometry();
     void ImportModel(const std::wstring& modelPath);
-    void UploadTexture(const TextureData& texData, int textureSlot = 0);
+    void UploadTexture(const TextureData& texData, int textureSlot = 0, bool isNormalMap = false);
     void CreateConstantBuffer();
+
+    // ----- Deferred rendering methods -----
+    void CreateDeferredRootSignatures();
+    void CreateDeferredPipelines();
+    void CreateLightingConstantBuffer();
+    void RenderDeferredFrame();
+    void RenderGeometryPass();
+    void RenderLightingPass();
+    void UpdateLightingConstants();
 
     // ----- Synchronization -----
     void FlushCommandQueue();
@@ -66,10 +114,34 @@ private:
         const std::string& entryPoint,
         const std::string& shaderModel);
 
+    // DirectXApp.h - обновить структуру DeferredLightCB:
+
+    struct DeferredLightCB
+    {
+        DirectX::XMFLOAT4 DirectionalLightDirection;
+        DirectX::XMFLOAT4 DirectionalLightColor;
+        DirectX::XMFLOAT4 AmbientColor;
+        DirectX::XMFLOAT4 LightCounts;  // x=static point, y=spot, z=dynamic, w=reserved
+        DirectX::XMFLOAT4 PointLightPositionRange[32];
+        DirectX::XMFLOAT4 PointLightColorIntensity[32];
+        DirectX::XMFLOAT4 SpotLightPositionRange[4];
+        DirectX::XMFLOAT4 SpotLightDirectionCosine[4];
+        DirectX::XMFLOAT4 SpotLightColorIntensity[4];
+        DirectX::XMFLOAT4 ScreenSize;
+        DirectX::XMFLOAT4X4 InvView;
+        DirectX::XMFLOAT4X4 InvProj;
+    };
+
     // Window properties
     HWND m_windowHandle;
     int  m_screenWidth;
     int  m_screenHeight;
+
+    // Input device (for camera control)
+    const InputDevice* m_inputDevice;
+
+    // Camera
+    Camera m_camera;
 
     // Animation
     float m_rotationAngle = 0.0f;
@@ -97,7 +169,10 @@ private:
 
     // Pipeline
     ComPtr<ID3D12RootSignature>       m_rootSignature;
+    ComPtr<ID3D12RootSignature>       m_deferredLightingRootSignature;
     ComPtr<ID3D12PipelineState>       m_pipelineState;
+    ComPtr<ID3D12PipelineState>       m_deferredGeometryPSO;
+    ComPtr<ID3D12PipelineState>       m_deferredLightingPSO;
 
     // Geometry
     ComPtr<ID3D12Resource>            m_vertexBuffer;
@@ -112,13 +187,90 @@ private:
     ComPtr<ID3D12Resource>            m_textureSecond;
     ComPtr<ID3D12Resource>            m_textureSecondUpload;
 
-    // Constant buffer
+    // Constant buffers
     ComPtr<ID3D12Resource>            m_constantBuffer;
     ConstantBufferData* m_mappedConstantData = nullptr;
+
+    ComPtr<ID3D12Resource>            m_deferredLightConstantBuffer;
+    uint8_t* m_deferredLightCBMappedData = nullptr;
+
+    // GBuffer
+    std::unique_ptr<GBuffer>          m_gbuffer;
+    // Добавьте в private секцию
+    void CreateTessellationPipeline();
+    void CreateTessellationGeometryPipeline();
+    ComPtr<ID3D12PipelineState> m_tessPipeline;
+    ComPtr<ID3D12PipelineState> m_tessGeometryPSO;
+
+    // Rendering System
+    std::unique_ptr<RenderingSystem>  m_renderingSystem;
 
     // Fence
     ComPtr<ID3D12Fence>               m_fence;
     UINT64                            m_fenceValues[BACK_BUFFER_COUNT] = {};
     HANDLE                            m_fenceEvent = nullptr;
     UINT                              m_currentBackBuffer = 0;
+
+    float GetAdaptiveTessellationFactor();
+
+    struct TessellationConstants
+    {
+        float TessellationFactor;
+        float DisplacementStrength;
+        float TessMinDist;
+        float TessMaxDist;
+        float Padding[4];
+    };
+
+    // В private секцию добавить:
+    ComPtr<ID3D12Resource> m_waterVertexBuffer;
+    ComPtr<ID3D12Resource> m_waterIndexBuffer;
+    D3D12_VERTEX_BUFFER_VIEW m_waterVertexBufferView = {};
+    D3D12_INDEX_BUFFER_VIEW m_waterIndexBufferView = {};
+    UINT m_waterIndexCount = 0;
+    DirectX::XMMATRIX m_waterWorldMatrix;
+    float m_waterTime = 0.0f;
+
+    void CreateWaterPlane();
+    void CreateWaterPipelineState();
+    ComPtr<ID3D12PipelineState> m_waterPipelineState;
+    // Tessellation constant buffer
+    ComPtr<ID3D12Resource> m_tessellationCB;
+    TessellationConstants* m_mappedTessellationData = nullptr;
+
+    // Rendering mode
+    bool m_useDeferredRendering = true;
+    ComPtr<ID3D12Resource> m_cubeConstantBuffer;
+    ConstantBufferData* m_mappedCubeConstantData = nullptr;
+    void CreateCubeConstantBuffer();
+    // В private секцию добавить:
+    // В секцию private добавь:
+// В секцию private добавь:
+    struct CubeInstance
+    {
+        DirectX::XMFLOAT3 Position;
+        float Scale;
+        DirectX::XMFLOAT3 Color;
+    };
+
+    static const int CUBE_COUNT = 1000;  // ИЗМЕНЕНО: 100 кубов
+    std::vector<CubeInstance> m_cubes;  // ИЗМЕНЕНО: вектор вместо массива
+    std::vector<ComPtr<ID3D12Resource>> m_cubeConstantBuffers;  // ИЗМЕНЕНО: вектор
+    std::vector<ConstantBufferData*> m_mappedCubeConstantDataArray;  // ИЗМЕНЕНО: вектор
+
+    void CreateWaterConstantBuffer();
+
+    struct WaterConstantData
+    {
+        float Time;
+        float WaveStrength;
+        float WaveSpeed;
+        float WaveFrequency;
+        float Padding[4];
+    };
+    ComPtr<ID3D12Resource> m_waterConstantBuffer;
+    WaterConstantData* m_mappedWaterConstantData = nullptr;
+    // В private секцию добавить:
+    ComPtr<ID3D12PipelineState> m_waterTessPipeline;
+    void CreateWaterTessellationPipeline();
 };
