@@ -40,11 +40,6 @@ public:
     void CreateTessellationConstantBuffer();
 
 private:
-    // DirectXApp.h - добавить в private секцию:
-    // Добавьте в класс DirectXApp новые поля
-    // В private секцию (у вас уже есть, но убедитесь):
-    bool renderSponza = false;
-    bool renderWater = true;
     ComPtr<ID3D12Resource> m_cubeVertexBuffer;
     ComPtr<ID3D12Resource> m_cubeIndexBuffer;
     D3D12_VERTEX_BUFFER_VIEW m_cubeVertexBufferView = {};
@@ -114,8 +109,6 @@ private:
     ComPtr<ID3DBlob> CompileShaderFile(const std::wstring& filePath,
         const std::string& entryPoint,
         const std::string& shaderModel);
-
-    // DirectXApp.h - обновить структуру DeferredLightCB:
 
     struct DeferredLightCB
     {
@@ -223,7 +216,6 @@ private:
         float Padding[4];
     };
 
-    // В private секцию добавить:
     ComPtr<ID3D12Resource> m_waterVertexBuffer;
     ComPtr<ID3D12Resource> m_waterIndexBuffer;
     D3D12_VERTEX_BUFFER_VIEW m_waterVertexBufferView = {};
@@ -244,9 +236,7 @@ private:
     ComPtr<ID3D12Resource> m_cubeConstantBuffer;
     ConstantBufferData* m_mappedCubeConstantData = nullptr;
     void CreateCubeConstantBuffer();
-    // В private секцию добавить:
-    // В секцию private добавь:
-// В секцию private добавь:
+
     struct CubeInstance
     {
         DirectX::XMFLOAT3 Position;
@@ -254,10 +244,10 @@ private:
         DirectX::XMFLOAT3 Color;
     };
 
-    static const int CUBE_COUNT = 1000;  // ИЗМЕНЕНО: 100 кубов
-    std::vector<CubeInstance> m_cubes;  // ИЗМЕНЕНО: вектор вместо массива
-    std::vector<ComPtr<ID3D12Resource>> m_cubeConstantBuffers;  // ИЗМЕНЕНО: вектор
-    std::vector<ConstantBufferData*> m_mappedCubeConstantDataArray;  // ИЗМЕНЕНО: вектор
+    static const int CUBE_COUNT = 1000;
+    std::vector<CubeInstance> m_cubes;
+    std::vector<ComPtr<ID3D12Resource>> m_cubeConstantBuffers;
+    std::vector<ConstantBufferData*> m_mappedCubeConstantDataArray;
 
     void CreateWaterConstantBuffer();
 
@@ -276,9 +266,7 @@ private:
     ComPtr<ID3D12PipelineState> m_waterTessPipeline;
     void CreateWaterTessellationPipeline();
 
-    // Добавьте в private секцию класса DirectXApp:
-
-// Frustum culling
+    // Frustum culling
     struct Frustum
     {
         DirectX::XMFLOAT4 Planes[6]; // Left, Right, Top, Bottom, Near, Far
@@ -294,34 +282,6 @@ private:
     int m_visibleCubesCount = 0;
     float m_cullingUpdateTimer = 0.0f;
 
-    // В private секцию класса DirectXApp, после объявления CUBE_COUNT:
-
-// Octree структуры
-    struct OctreeNode
-    {
-        DirectX::XMFLOAT3 Center;
-        float HalfSize;
-        std::vector<int> CubeIndices;  // Индексы кубов в этом узле
-        std::unique_ptr<OctreeNode> Children[8];
-        bool IsLeaf;
-
-        OctreeNode() : HalfSize(0), IsLeaf(true) {}
-    };
-
-    void BuildOctree();
-    void BuildOctreeNode(OctreeNode* node, const std::vector<int>& cubeIndices,
-        const DirectX::XMFLOAT3& center, float halfSize, int depth);
-    void CullOctree(OctreeNode* node, std::vector<int>& outVisibleIndices);
-    void RenderCulledCubes(const std::vector<int>& visibleIndices,
-        const DirectX::XMMATRIX& viewMatrix,
-        const DirectX::XMMATRIX& projMatrix,
-        const DirectX::XMFLOAT3& cameraPos);
-
-    std::unique_ptr<OctreeNode> m_octreeRoot;
-    int m_octreeMaxDepth = 3;  // Максимальная глубина октодерева
-    int m_minCubesPerNode = 10; // Минимум кубов в узле перед разделением
-
-    // В private секцию, рядом с struct Frustum
     struct AABB
     {
         DirectX::XMFLOAT3 Min;
@@ -379,11 +339,9 @@ private:
         }
     };
 
-
-    // В private секцию, рядом с m_cubes
     std::vector<AABB> m_cubeAABBs;
     bool IsAABBInFrustum(const AABB& aabb) const;
-    bool IsAABBInFrustum(const AABB& aabb, const Frustum& frustum) const;  // ДОБАВИТЬ
+    bool IsAABBInFrustum(const AABB& aabb, const Frustum& frustum) const;
     // В DirectXApp.h добавить:
     struct KDTreeNode
     {
@@ -407,7 +365,6 @@ private:
     static constexpr int MIN_CUBES_PER_NODE = 10;  // Минимум кубов в листе
     static constexpr int MAX_KD_DEPTH = 12;        // Максимальная глубина
 
-    // В public секцию (после других методов):
     enum class CullingMode
     {
         None,      // Рендерим все кубы
@@ -415,16 +372,18 @@ private:
         Octree     // Octree culling
     };
 
+    // Флаги для управления рендером
+    const bool renderSponza = false;
+    const bool renderWater = true;
+
     void SetCullingMode(CullingMode mode);
     CullingMode GetCullingMode() const { return m_cullingMode; }
 
-    // В private секцию добавить:
     CullingMode m_cullingMode = CullingMode::Octree;  // По умолчанию Octree
     // Для обработки нажатий клавиш
     bool m_prevCKey = false;
     bool m_prevVKey = false;
 
-    // В private секцию добавьте:
     void CreateInstancedPipeline();
     void CreateInstanceBuffer();
     void UpdateInstanceBuffer(const std::vector<int>& visibleIndices);
