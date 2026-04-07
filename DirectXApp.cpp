@@ -2,6 +2,8 @@
 #include "ThrowIfFailed.h"
 #include <cassert>
 #include <memory>
+#include <DirectXMath.h>
+using namespace DirectX;
 
 // Constructor / Destructor
 DirectXApp::DirectXApp(HWND windowHandle, int windowWidth, int windowHeight, const InputDevice* inputDevice)
@@ -985,6 +987,38 @@ void DirectXApp::Update(float deltaTime)
         m_shootCooldown = SHOOT_COOLDOWN_TIME;
     }
 
+    // ========== ПЕРЕКЛЮЧЕНИЕ РЕЖИМОВ CULLING ==========
+    if (m_inputDevice)
+    {
+        // Клавиша C - циклическое переключение
+        if (m_inputDevice->IsKeyDown('C') && !m_prevCKey)
+        {
+            switch (m_cullingMode)
+            {
+            case CullingMode::None:
+                SetCullingMode(CullingMode::Frustum);
+                break;
+            case CullingMode::Frustum:
+                SetCullingMode(CullingMode::Octree);
+                break;
+            case CullingMode::Octree:
+                SetCullingMode(CullingMode::None);
+                break;
+            }
+        }
+        m_prevCKey = m_inputDevice->IsKeyDown('C');
+
+        // Клавиша V - быстрое отключение/включение
+        if (m_inputDevice->IsKeyDown('V') && !m_prevVKey)
+        {
+            if (m_cullingMode == CullingMode::None)
+                SetCullingMode(CullingMode::Octree);
+            else
+                SetCullingMode(CullingMode::None);
+        }
+        m_prevVKey = m_inputDevice->IsKeyDown('V');
+    }
+
     // Обновляем время воды для анимации
     m_waterTime += deltaTime;
     if (m_waterTime > 1000.0f) m_waterTime -= 1000.0f;
@@ -997,19 +1031,6 @@ void DirectXApp::Update(float deltaTime)
         m_mappedWaterConstantData->WaveFrequency = 1.5f;
     }
 
-    // Матрица модели
-    float scale = 0.1f;
-    DirectX::XMMATRIX scaleMatrix = DirectX::XMMatrixScaling(scale, scale, scale);
-    DirectX::XMMATRIX rotationMatrix = DirectX::XMMatrixRotationY(0.0f);
-    DirectX::XMMATRIX worldMatrix = scaleMatrix * rotationMatrix;
-
-    // В конце Update() добавьте:
-// В Update() измените:
-    float cubeScale = 7.0f;      // Увеличим размер
-    float cubeY = 25.0f;         // Поднимем над водой (вода на Y=20)
-    DirectX::XMMATRIX cubeScaleMatrix = DirectX::XMMatrixScaling(cubeScale, cubeScale, cubeScale);
-    DirectX::XMMATRIX cubeTranslationMatrix = DirectX::XMMatrixTranslation(0.0f, cubeY, 0.0f);
-    m_cubeWorldMatrix = cubeScaleMatrix * cubeTranslationMatrix;
     // Матрицы камеры
     float aspectRatio = (m_screenHeight > 0) ? static_cast<float>(m_screenWidth) / m_screenHeight : 1.0f;
     DirectX::XMMATRIX viewMatrix = m_camera.GetViewMatrix();
@@ -1018,9 +1039,9 @@ void DirectXApp::Update(float deltaTime)
     // Позиция камеры
     DirectX::XMFLOAT3 cameraPos = m_camera.GetPosition();
 
-    // Константный буфер
+    // Константный буфер для воды/дворца
     ConstantBufferData constantData = {};
-    constantData.World = DirectX::XMMatrixTranspose(worldMatrix);
+    constantData.World = DirectX::XMMatrixTranspose(DirectX::XMMatrixScaling(0.1f, 0.1f, 0.1f) * DirectX::XMMatrixRotationY(0.0f));
     constantData.View = DirectX::XMMatrixTranspose(viewMatrix);
     constantData.Proj = DirectX::XMMatrixTranspose(projMatrix);
     constantData.LightPos = DirectX::XMFLOAT4(2.0f, 5.0f, -2.0f, 0.0f);
@@ -1081,105 +1102,203 @@ void DirectXApp::RenderGeometryPass()
     m_cmdList->SetDescriptorHeaps(1, heaps);
     m_cmdList->SetGraphicsRootSignature(m_rootSignature.Get());
 
-    // ========== 1. РЕНДЕРИМ ВСЕ 1000 КУБОВ ==========
-    m_cmdList->SetPipelineState(m_cubePipelineState.Get());
-
-    float aspectRatio = (m_screenHeight > 0) ? static_cast<float>(m_screenWidth) / m_screenHeight : 1.0f;
-    DirectX::XMMATRIX viewMatrix = m_camera.GetViewMatrix();
-    DirectX::XMMATRIX projMatrix = m_camera.GetProjectionMatrix(aspectRatio);
-    DirectX::XMFLOAT3 cameraPos = m_camera.GetPosition();
-
-    for (int i = 0; i < CUBE_COUNT; ++i)
     {
-        ConstantBufferData cubeData = {};
+        m_cmdList->SetPipelineState(m_instancedPipelineState.Get());
 
-        DirectX::XMMATRIX cubeWorld = DirectX::XMMatrixScaling(m_cubes[i].Scale, m_cubes[i].Scale, m_cubes[i].Scale) *
-            DirectX::XMMatrixTranslation(m_cubes[i].Position.x, m_cubes[i].Position.y, m_cubes[i].Position.z);
+        float aspectRatio = (m_screenHeight > 0) ? static_cast<float>(m_screenWidth) / m_screenHeight : 1.0f;
+        DirectX::XMMATRIX viewMatrix = m_camera.GetViewMatrix();
+        DirectX::XMMATRIX projMatrix = m_camera.GetProjectionMatrix(aspectRatio);
+        DirectX::XMFLOAT3 cameraPos = m_camera.GetPosition();
 
-        cubeData.World = DirectX::XMMatrixTranspose(cubeWorld);
-        cubeData.View = DirectX::XMMatrixTranspose(viewMatrix);
-        cubeData.Proj = DirectX::XMMatrixTranspose(projMatrix);
-        cubeData.LightPos = DirectX::XMFLOAT4(2.0f, 5.0f, -2.0f, 0.0f);
-        cubeData.LightColor = DirectX::XMFLOAT4(m_cubes[i].Color.x, m_cubes[i].Color.y, m_cubes[i].Color.z, 1.0f);
-        cubeData.CameraPos = DirectX::XMFLOAT4(cameraPos.x, cameraPos.y, cameraPos.z, 0.0f);
-        cubeData.Tiling = DirectX::XMFLOAT2(1.0f, 1.0f);
-        cubeData.UVOffset = DirectX::XMFLOAT2(0.0f, 0.0f);
+        // Константные данные для всех инстансов
+        ConstantBufferData globalData = {};
+        globalData.World = DirectX::XMMatrixTranspose(DirectX::XMMatrixIdentity());
+        globalData.View = DirectX::XMMatrixTranspose(viewMatrix);
+        globalData.Proj = DirectX::XMMatrixTranspose(projMatrix);
+        globalData.LightPos = DirectX::XMFLOAT4(2.0f, 5.0f, -2.0f, 0.0f);
+        globalData.LightColor = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+        globalData.CameraPos = DirectX::XMFLOAT4(cameraPos.x, cameraPos.y, cameraPos.z, 0.0f);
+        globalData.Tiling = DirectX::XMFLOAT2(1.0f, 1.0f);
+        globalData.UVOffset = DirectX::XMFLOAT2(0.0f, 0.0f);
 
-        memcpy(m_mappedCubeConstantDataArray[i], &cubeData, sizeof(ConstantBufferData));
+        memcpy(m_mappedConstantData, &globalData, sizeof(ConstantBufferData));
 
-        m_cmdList->SetGraphicsRootConstantBufferView(0, m_cubeConstantBuffers[i]->GetGPUVirtualAddress());
+        // Обновляем frustum и получаем видимые индексы
+        UpdateFrustum();
+
+        std::vector<int> visibleIndices;
+
+        switch (m_cullingMode)
+        {
+        case CullingMode::None:
+            for (int i = 0; i < CUBE_COUNT; ++i)
+                visibleIndices.push_back(i);
+            break;
+
+        case CullingMode::Frustum:
+            for (int i = 0; i < CUBE_COUNT; ++i)
+            {
+                float radius = 0.866f * m_cubes[i].Scale * 1.5f;
+                if (IsSphereInFrustum(m_cubes[i].Position, radius))
+                    visibleIndices.push_back(i);
+            }
+            break;
+
+        case CullingMode::Octree:
+            if (m_kdTreeRoot)
+                CullKDTree(m_kdTreeRoot.get(), m_frustum, visibleIndices);
+            else
+                for (int i = 0; i < CUBE_COUNT; ++i)
+                    visibleIndices.push_back(i);
+            break;
+        }
+
+        if (!visibleIndices.empty())
+        {
+            // Обновляем буфер инстансов данными только для видимых кубов
+            for (size_t i = 0; i < visibleIndices.size(); ++i)
+            {
+                int idx = visibleIndices[i];
+                m_visibleInstanceData[i].Position = m_cubes[idx].Position;
+                m_visibleInstanceData[i].Scale = m_cubes[idx].Scale;
+                m_visibleInstanceData[i].Color = m_cubes[idx].Color;
+                m_visibleInstanceData[i].Padding = 0.0f;
+            }
+
+            UINT64 dataSize = visibleIndices.size() * sizeof(InstanceData);
+
+            // Копируем в upload buffer
+            void* mappedData = nullptr;
+            m_instanceUploadBuffer->Map(0, nullptr, &mappedData);
+            memcpy(mappedData, m_visibleInstanceData.data(), (size_t)dataSize);
+            m_instanceUploadBuffer->Unmap(0, nullptr);
+
+            // Копируем в default buffer
+            m_cmdList->CopyBufferRegion(m_instanceBuffer.Get(), 0,
+                m_instanceUploadBuffer.Get(), 0, dataSize);
+
+            // Добавляем барьер для гарантии, что копирование завершено
+            D3D12_RESOURCE_BARRIER barrier = {};
+            barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barrier.Transition.pResource = m_instanceBuffer.Get();
+            barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+            barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            m_cmdList->ResourceBarrier(1, &barrier);
+
+            // Устанавливаем буферы: слот 0 - вершины, слот 1 - инстансы
+            m_cmdList->IASetVertexBuffers(0, 1, &m_cubeVertexBufferView);
+            m_cmdList->IASetVertexBuffers(1, 1, &m_instanceBufferView);
+            m_cmdList->IASetIndexBuffer(&m_cubeIndexBufferView);
+            m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+            // Root signature параметры
+            m_cmdList->SetGraphicsRootConstantBufferView(0, m_constantBuffer->GetGPUVirtualAddress());
+            m_cmdList->SetGraphicsRootDescriptorTable(1, m_srvHeap->GetGPUDescriptorHandleForHeapStart());
+            m_cmdList->SetGraphicsRootConstantBufferView(2, m_tessellationCB->GetGPUVirtualAddress());
+            m_cmdList->SetGraphicsRootConstantBufferView(3, m_waterConstantBuffer->GetGPUVirtualAddress());
+
+            m_cmdList->DrawIndexedInstanced(m_cubeIndexCount, (UINT)visibleIndices.size(), 0, 0, 0);
+
+            // Возвращаем буфер в исходное состояние
+            barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+            m_cmdList->ResourceBarrier(1, &barrier);
+        }
+
+        static float debugTimer = 0.0f;
+        debugTimer += 1.0f / 60.0f;
+        if (debugTimer >= 1.0f)
+        {
+            debugTimer = 0.0f;
+            const wchar_t* modeStr = L"None";
+            switch (m_cullingMode)
+            {
+            case CullingMode::None:    modeStr = L"NO CULLING"; break;
+            case CullingMode::Frustum: modeStr = L"FRUSTUM"; break;
+            case CullingMode::Octree:  modeStr = L"OCTREE"; break;
+            }
+            wchar_t title[256];
+            swprintf_s(title, L"[%s] INSTANCING: %zu / %d cubes visible | WATER: ON | PALACE: OFF",
+                modeStr, visibleIndices.size(), CUBE_COUNT);
+            SetWindowTextW(m_windowHandle, title);
+        }
+    }
+
+    if (renderWater)
+    {
+        m_cmdList->SetPipelineState(m_waterTessPipeline.Get());
+
+        float aspectRatio = (m_screenHeight > 0) ? static_cast<float>(m_screenWidth) / m_screenHeight : 1.0f;
+        DirectX::XMMATRIX viewMatrix = m_camera.GetViewMatrix();
+        DirectX::XMMATRIX projMatrix = m_camera.GetProjectionMatrix(aspectRatio);
+        DirectX::XMFLOAT3 cameraPos = m_camera.GetPosition();
+
+        ConstantBufferData waterData = {};
+        waterData.World = DirectX::XMMatrixTranspose(m_waterWorldMatrix);
+        waterData.View = DirectX::XMMatrixTranspose(viewMatrix);
+        waterData.Proj = DirectX::XMMatrixTranspose(projMatrix);
+        waterData.LightPos = DirectX::XMFLOAT4(2.0f, 5.0f, -2.0f, 0.0f);
+        waterData.LightColor = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+        waterData.CameraPos = DirectX::XMFLOAT4(cameraPos.x, cameraPos.y, cameraPos.z, m_waterTime);
+        waterData.Tiling = DirectX::XMFLOAT2(1.0f, 1.0f);
+        waterData.UVOffset = DirectX::XMFLOAT2(0.0f, 0.0f);
+
+        memcpy(m_mappedConstantData, &waterData, sizeof(ConstantBufferData));
+
+        m_cmdList->SetGraphicsRootConstantBufferView(0, m_constantBuffer->GetGPUVirtualAddress());
         m_cmdList->SetGraphicsRootDescriptorTable(1, m_srvHeap->GetGPUDescriptorHandleForHeapStart());
         m_cmdList->SetGraphicsRootConstantBufferView(2, m_tessellationCB->GetGPUVirtualAddress());
-
-        m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        m_cmdList->IASetVertexBuffers(0, 1, &m_cubeVertexBufferView);
-        m_cmdList->IASetIndexBuffer(&m_cubeIndexBufferView);
-        m_cmdList->DrawIndexedInstanced(m_cubeIndexCount, 1, 0, 0, 0);
-    }
-
-    // ========== 2. РЕНДЕРИМ ВОДУ ==========
-    m_cmdList->SetPipelineState(m_waterTessPipeline.Get());
-
-    ConstantBufferData waterData = {};
-    waterData.World = DirectX::XMMatrixTranspose(m_waterWorldMatrix);
-    waterData.View = DirectX::XMMatrixTranspose(viewMatrix);
-    waterData.Proj = DirectX::XMMatrixTranspose(projMatrix);
-    waterData.LightPos = DirectX::XMFLOAT4(2.0f, 5.0f, -2.0f, 0.0f);
-    waterData.LightColor = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
-    waterData.CameraPos = DirectX::XMFLOAT4(cameraPos.x, cameraPos.y, cameraPos.z, m_waterTime);
-    waterData.Tiling = DirectX::XMFLOAT2(1.0f, 1.0f);
-    waterData.UVOffset = DirectX::XMFLOAT2(0.0f, 0.0f);
-
-    memcpy(m_mappedConstantData, &waterData, sizeof(ConstantBufferData));
-
-    m_cmdList->SetGraphicsRootConstantBufferView(0, m_constantBuffer->GetGPUVirtualAddress());
-    m_cmdList->SetGraphicsRootDescriptorTable(1, m_srvHeap->GetGPUDescriptorHandleForHeapStart());
-    m_cmdList->SetGraphicsRootConstantBufferView(2, m_tessellationCB->GetGPUVirtualAddress());
-
-    if (m_waterConstantBuffer)
-    {
         m_cmdList->SetGraphicsRootConstantBufferView(3, m_waterConstantBuffer->GetGPUVirtualAddress());
+
+        m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
+        m_cmdList->IASetVertexBuffers(0, 1, &m_waterVertexBufferView);
+        m_cmdList->IASetIndexBuffer(&m_waterIndexBufferView);
+        m_cmdList->DrawIndexedInstanced(m_waterIndexCount, 1, 0, 0, 0);
     }
 
-    m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
-    m_cmdList->IASetVertexBuffers(0, 1, &m_waterVertexBufferView);
-    m_cmdList->IASetIndexBuffer(&m_waterIndexBufferView);
-    m_cmdList->DrawIndexedInstanced(m_waterIndexCount, 1, 0, 0, 0);
+    if (renderSponza)
+    {
+        TessellationConstants tessConsts;
+        tessConsts.TessellationFactor = GetAdaptiveTessellationFactor();
+        tessConsts.DisplacementStrength = 0.02f;
+        tessConsts.TessMinDist = 0.0f;
+        tessConsts.TessMaxDist = 30.0f;
+        memcpy(m_mappedTessellationData, &tessConsts, sizeof(tessConsts));
 
-    // ========== 3. РЕНДЕРИМ МОДЕЛЬ ДВОРЦА ==========
-    TessellationConstants tessConsts;
-    tessConsts.TessellationFactor = GetAdaptiveTessellationFactor();
-    tessConsts.DisplacementStrength = 0.02f;
-    tessConsts.TessMinDist = 0.0f;
-    tessConsts.TessMaxDist = 30.0f;
-    memcpy(m_mappedTessellationData, &tessConsts, sizeof(tessConsts));
+        float aspectRatio = (m_screenHeight > 0) ? static_cast<float>(m_screenWidth) / m_screenHeight : 1.0f;
+        DirectX::XMMATRIX viewMatrix = m_camera.GetViewMatrix();
+        DirectX::XMMATRIX projMatrix = m_camera.GetProjectionMatrix(aspectRatio);
+        DirectX::XMFLOAT3 cameraPos = m_camera.GetPosition();
 
-    ConstantBufferData palaceData = {};
-    palaceData.World = DirectX::XMMatrixTranspose(DirectX::XMMatrixScaling(0.1f, 0.1f, 0.1f));
-    palaceData.View = DirectX::XMMatrixTranspose(viewMatrix);
-    palaceData.Proj = DirectX::XMMatrixTranspose(projMatrix);
-    palaceData.LightPos = DirectX::XMFLOAT4(2.0f, 5.0f, -2.0f, 0.0f);
-    palaceData.LightColor = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
-    palaceData.CameraPos = DirectX::XMFLOAT4(cameraPos.x, cameraPos.y, cameraPos.z, m_waterTime);
+        ConstantBufferData palaceData = {};
+        palaceData.World = DirectX::XMMatrixTranspose(DirectX::XMMatrixScaling(0.1f, 0.1f, 0.1f));
+        palaceData.View = DirectX::XMMatrixTranspose(viewMatrix);
+        palaceData.Proj = DirectX::XMMatrixTranspose(projMatrix);
+        palaceData.LightPos = DirectX::XMFLOAT4(2.0f, 5.0f, -2.0f, 0.0f);
+        palaceData.LightColor = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+        palaceData.CameraPos = DirectX::XMFLOAT4(cameraPos.x, cameraPos.y, cameraPos.z, m_waterTime);
+        palaceData.Tiling = DirectX::XMFLOAT2(1.0f, 1.0f);
+        palaceData.UVOffset = DirectX::XMFLOAT2(0.0f, 0.0f);
 
-    memcpy(m_mappedConstantData, &palaceData, sizeof(ConstantBufferData));
+        memcpy(m_mappedConstantData, &palaceData, sizeof(ConstantBufferData));
 
-    m_renderingSystem->RenderGeometryPass(
-        m_cmdList.Get(),
-        m_rootSignature.Get(),
-        m_tessGeometryPSO.Get(),
-        m_vertexBufferView,
-        m_indexBufferView,
-        m_indexCount,
-        m_srvHeap.Get(),
-        m_constantBuffer.Get(),
-        m_tessellationCB.Get(),
-        m_gbuffer.get(),
-        dsvHandle);
+        m_renderingSystem->RenderGeometryPass(
+            m_cmdList.Get(),
+            m_rootSignature.Get(),
+            m_tessGeometryPSO.Get(),
+            m_vertexBufferView,
+            m_indexBufferView,
+            m_indexCount,
+            m_srvHeap.Get(),
+            m_constantBuffer.Get(),
+            m_tessellationCB.Get(),
+            m_gbuffer.get(),
+            dsvHandle);
+    }
 
     m_gbuffer->EndGeometryPass(m_cmdList.Get());
 }
-
 void DirectXApp::RenderLightingPass()
 {
     D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
@@ -1400,7 +1519,6 @@ bool DirectXApp::Initialize()
             if (modelData.valid)
             {
                 BuildMeshBuffers(modelData.vertices, modelData.indices);
-                MessageBoxA(m_windowHandle, "Model loaded successfully!", "Info", MB_OK);
             }
             else
             {
@@ -1414,7 +1532,6 @@ bool DirectXApp::Initialize()
             if (texData0.valid)
             {
                 UploadTexture(texData0, 0, false);
-                MessageBoxA(m_windowHandle, "Main texture loaded!", "Info", MB_OK);
             }
 
             TextureData normalData = LoadTextureWIC(workingDir + L"normal.png");
@@ -1424,7 +1541,6 @@ bool DirectXApp::Initialize()
             {
                 UploadTexture(normalData, 1, true);
                 m_useNormalMap = true;
-                MessageBoxA(m_windowHandle, "Normal map loaded!", "Info", MB_OK);
             }
 
             TextureData displacementData = LoadTextureWIC(workingDir + L"displacement.png");
@@ -1434,7 +1550,6 @@ bool DirectXApp::Initialize()
             {
                 UploadTexture(displacementData, 2, false);
                 m_useDisplacement = true;
-                MessageBoxA(m_windowHandle, "Displacement map loaded!", "Info", MB_OK);
             }
 
             TextureData texData3 = LoadTextureWIC(workingDir + L"texture_second.png");
@@ -1443,7 +1558,6 @@ bool DirectXApp::Initialize()
             if (texData3.valid)
             {
                 UploadTexture(texData3, 3, false);
-                MessageBoxA(m_windowHandle, "Second texture loaded!", "Info", MB_OK);
             }
         }
 
@@ -1453,12 +1567,16 @@ bool DirectXApp::Initialize()
         CreateCubeGeometry();
         CreateCubePipelineState();
 
-        // ========== СОЗДАЕМ 1000 КОНСТАНТНЫХ БУФЕРОВ ==========
+        // ========== СОЗДАЕМ INSTANCING PSO И БУФЕР ==========
+        CreateInstancedPipeline();
+        CreateInstanceBuffer();
+
+        // ========== СОЗДАЕМ 1000 КОНСТАНТНЫХ БУФЕРОВ (для fallback режима) ==========
         m_cubes.resize(CUBE_COUNT);
         m_cubeConstantBuffers.resize(CUBE_COUNT);
         m_mappedCubeConstantDataArray.resize(CUBE_COUNT);
 
-        // Создаем константные буферы для всех 1000 кубов
+        // Создаем константные буферы для всех 1000 кубов (fallback)
         for (int i = 0; i < CUBE_COUNT; ++i)
         {
             UINT64 bufferSize = sizeof(ConstantBufferData);
@@ -1484,46 +1602,51 @@ bool DirectXApp::Initialize()
                 reinterpret_cast<void**>(&m_mappedCubeConstantDataArray[i])));
         }
 
-        // ========== ГЕНЕРИРУЕМ 1000 КУБОВ В СЕТКЕ 33x33 ==========
-        int gridSize = 33;  // 33x33 = 1089 кубов (больше 1000)
-        float spacing = 2.5f;
-        float startX = -(gridSize - 1) * spacing / 2.0f;
-        float startZ = -(gridSize - 1) * spacing / 2.0f;
+        // ========== ГЕНЕРИРУЕМ 1000 КУБОВ СЛУЧАЙНО ==========
+        std::mt19937 rng(static_cast<unsigned>(std::time(nullptr)));
+        std::uniform_real_distribution<float> posX(-50.0f, 50.0f);
+        std::uniform_real_distribution<float> posZ(-50.0f, 50.0f);
+        std::uniform_real_distribution<float> posY(-2.0f, 15.0f);
+        std::uniform_real_distribution<float> scaleDist(1.2f, 4.5f);
+        std::uniform_real_distribution<float> colorDist(0.2f, 1.0f);
 
-        int index = 0;
-        for (int x = 0; x < gridSize && index < CUBE_COUNT; ++x)
+        for (int i = 0; i < CUBE_COUNT; ++i)
         {
-            for (int z = 0; z < gridSize && index < CUBE_COUNT; ++z)
-            {
-                float posX = startX + x * spacing;
-                float posZ = startZ + z * spacing;
-                float posY = 0.0f;
+            float x = posX(rng);
+            float z = posZ(rng);
+            float y = posY(rng);
+            float scale = scaleDist(rng);
 
-                // Случайный размер от 0.5 до 1.5
-                float scale = 0.8f + (float)(rand() % 70) / 100.0f;
+            float r = colorDist(rng);
+            float g = colorDist(rng);
+            float b = colorDist(rng);
 
-                // Радужные цвета на основе позиции
-                float r = (float)x / gridSize;
-                float g = (float)z / gridSize;
-                float b = (float)((x + z) % gridSize) / gridSize;
-
-                m_cubes[index] = { DirectX::XMFLOAT3(posX, posY, posZ), scale, DirectX::XMFLOAT3(r, g, b) };
-                index++;
-            }
-        }
-
-        // Если нужно заполнить оставшиеся (на случай если 33x33 не хватило)
-        while (index < CUBE_COUNT)
-        {
-            float angle = (float)index * 3.14159f * 2.0f / 50.0f;
-            float radius = 40.0f;
-            m_cubes[index] = {
-                DirectX::XMFLOAT3(cos(angle) * radius, sin(angle * 5.0f) * 3.0f, sin(angle) * radius),
-                0.8f,
-                DirectX::XMFLOAT3(0.5f + sin(angle) * 0.5f, 0.5f + cos(angle * 2.0f) * 0.5f, 0.5f + sin(angle * 3.0f) * 0.5f)
+            m_cubes[i] = {
+                DirectX::XMFLOAT3(x, y, z),
+                scale,
+                DirectX::XMFLOAT3(r, g, b)
             };
-            index++;
         }
+
+        // Создаем AABB для каждого куба
+        m_cubeAABBs.resize(CUBE_COUNT);
+        for (int i = 0; i < CUBE_COUNT; ++i)
+        {
+            float half = m_cubes[i].Scale * 0.5f;
+            m_cubeAABBs[i].Min = DirectX::XMFLOAT3(
+                m_cubes[i].Position.x - half,
+                m_cubes[i].Position.y - half,
+                m_cubes[i].Position.z - half
+            );
+            m_cubeAABBs[i].Max = DirectX::XMFLOAT3(
+                m_cubes[i].Position.x + half,
+                m_cubes[i].Position.y + half,
+                m_cubes[i].Position.z + half
+            );
+        }
+
+        // Строим KD-дерево для culling
+        BuildKDTree();
 
         ThrowIfFailed(m_cmdList->Close());
         ID3D12CommandList* commandLists[] = { m_cmdList.Get() };
@@ -1533,11 +1656,6 @@ bool DirectXApp::Initialize()
         CreateConstantBuffer();
         UpdateLightingConstants();
 
-        std::string info = "Initialization complete!\n";
-        info += "Cubes: " + std::to_string(CUBE_COUNT) + "\n";
-        info += "Normal map: " + std::string(m_useNormalMap ? "YES" : "NO") + "\n";
-        info += "Displacement: " + std::string(m_useDisplacement ? "YES" : "NO") + "\n";
-        MessageBoxA(m_windowHandle, info.c_str(), "Initialization Info", MB_OK);
     }
     catch (const std::exception& e)
     {
@@ -1553,7 +1671,6 @@ bool DirectXApp::Initialize()
     }
     return true;
 }
-
 void DirectXApp::CreateD3DDevice()
 {
 #ifdef _DEBUG
@@ -1609,7 +1726,6 @@ void DirectXApp::CreateCubePipelineState()
     std::wstring filePath(exePath);
     filePath = filePath.substr(0, filePath.find_last_of(L"\\/") + 1) + L"shaders.hlsl";
 
-    // Используем CubeVSMain вместо GeometryVSMain
     auto vs = CompileShaderFile(filePath, "CubeVSMain", "vs_5_0");
     auto ps = CompileShaderFile(filePath, "CubePSMain", "ps_5_0");
 
@@ -2173,4 +2289,410 @@ void DirectXApp::CreateWaterTessellationPipeline()
     psoDesc.SampleDesc = { 1, 0 };
 
     ThrowIfFailed(m_d3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_waterTessPipeline)));
+}
+
+void DirectXApp::UpdateFrustum()
+{
+    float aspectRatio = (m_screenHeight > 0) ?
+        static_cast<float>(m_screenWidth) / m_screenHeight : 1.0f;
+
+    XMMATRIX view = m_camera.GetViewMatrix();
+    XMMATRIX proj = m_camera.GetProjectionMatrix(aspectRatio);
+    XMMATRIX viewProj = view * proj;
+
+    XMFLOAT4X4 m;
+    XMStoreFloat4x4(&m, viewProj);
+
+    // Извлечение плоскостей для DirectX
+    // Левая:   Col4 + Col1
+    m_frustum.Planes[0] = XMFLOAT4(m._14 + m._11, m._24 + m._21, m._34 + m._31, m._44 + m._41);
+    // Правая:  Col4 - Col1
+    m_frustum.Planes[1] = XMFLOAT4(m._14 - m._11, m._24 - m._21, m._34 - m._31, m._44 - m._41);
+    // Нижняя:  Col4 + Col2
+    m_frustum.Planes[2] = XMFLOAT4(m._14 + m._12, m._24 + m._22, m._34 + m._32, m._44 + m._42);
+    // Верхняя: Col4 - Col2
+    m_frustum.Planes[3] = XMFLOAT4(m._14 - m._12, m._24 - m._22, m._34 - m._32, m._44 - m._42);
+    // Ближняя: Col4 + Col3
+    m_frustum.Planes[4] = XMFLOAT4(m._14 + m._13, m._24 + m._23, m._34 + m._33, m._44 + m._43);
+    // Дальняя: Col4 - Col3
+    m_frustum.Planes[5] = XMFLOAT4(m._14 - m._13, m._24 - m._23, m._34 - m._33, m._44 - m._43);
+
+    // Нормализация
+    for (int i = 0; i < 6; ++i)
+    {
+        float len = sqrtf(m_frustum.Planes[i].x * m_frustum.Planes[i].x +
+            m_frustum.Planes[i].y * m_frustum.Planes[i].y +
+            m_frustum.Planes[i].z * m_frustum.Planes[i].z);
+        if (len > 0.0001f)
+        {
+            float invLen = 1.0f / len;
+            m_frustum.Planes[i].x *= invLen;
+            m_frustum.Planes[i].y *= invLen;
+            m_frustum.Planes[i].z *= invLen;
+            m_frustum.Planes[i].w *= invLen;
+        }
+    }
+}
+
+bool DirectXApp::IsSphereInFrustum(const DirectX::XMFLOAT3& center, float radius) const
+{
+    for (int i = 0; i < 6; ++i)
+    {
+        float distance = m_frustum.Planes[i].x * center.x +
+            m_frustum.Planes[i].y * center.y +
+            m_frustum.Planes[i].z * center.z +
+            m_frustum.Planes[i].w;
+
+        if (distance < -radius)
+            return false; // Полностью вне frustum
+    }
+    return true;
+}
+
+
+void DirectXApp::SetCullingMode(CullingMode mode)
+{
+    m_cullingMode = mode;
+
+    const wchar_t* modeName = L"Unknown";
+    switch (mode)
+    {
+    case CullingMode::None:    modeName = L"NO CULLING (All cubes)"; break;
+    case CullingMode::Frustum: modeName = L"FRUSTUM CULLING"; break;
+    case CullingMode::Octree:  modeName = L"OCTREE CULLING"; break;
+    }
+
+    wchar_t title[256];
+    swprintf_s(title, L"Culling Mode: %s", modeName);
+    SetWindowTextW(m_windowHandle, title);
+}
+
+bool DirectXApp::IsAABBInFrustum(const AABB& aabb) const
+{
+    for (int i = 0; i < 6; ++i)
+    {
+        const XMFLOAT4& plane = m_frustum.Planes[i];
+
+        // Выбираем самую дальнюю вершину AABB в направлении плоскости
+        float px = (plane.x > 0.0f) ? aabb.Max.x : aabb.Min.x;
+        float py = (plane.y > 0.0f) ? aabb.Max.y : aabb.Min.y;
+        float pz = (plane.z > 0.0f) ? aabb.Max.z : aabb.Min.z;
+
+        float distance = plane.x * px + plane.y * py + plane.z * pz + plane.w;
+
+        if (distance < 0.0f)
+            return false;  // Полностью вне frustum
+    }
+    return true;  // Пересекает или внутри
+}
+
+void DirectXApp::BuildKDTree()
+{
+    // Находим общие границы всех кубов
+    AABB worldBounds;
+    worldBounds.Min = XMFLOAT3(FLT_MAX, FLT_MAX, FLT_MAX);
+    worldBounds.Max = XMFLOAT3(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+
+    for (int i = 0; i < CUBE_COUNT; ++i)
+    {
+        worldBounds.Min.x = min(worldBounds.Min.x, m_cubeAABBs[i].Min.x);
+        worldBounds.Min.y = min(worldBounds.Min.y, m_cubeAABBs[i].Min.y);
+        worldBounds.Min.z = min(worldBounds.Min.z, m_cubeAABBs[i].Min.z);
+        worldBounds.Max.x = max(worldBounds.Max.x, m_cubeAABBs[i].Max.x);
+        worldBounds.Max.y = max(worldBounds.Max.y, m_cubeAABBs[i].Max.y);
+        worldBounds.Max.z = max(worldBounds.Max.z, m_cubeAABBs[i].Max.z);
+    }
+
+    std::vector<int> allIndices(CUBE_COUNT);
+    for (int i = 0; i < CUBE_COUNT; ++i)
+        allIndices[i] = i;
+
+    m_kdTreeRoot = std::make_unique<KDTreeNode>();
+    BuildKDTreeNode(m_kdTreeRoot, allIndices, worldBounds, 0);
+}
+
+void DirectXApp::BuildKDTreeNode(std::unique_ptr<KDTreeNode>& node,
+    std::vector<int>& indices,
+    const AABB& bounds, int depth)
+{
+    node->Bounds = bounds;
+    node->Axis = depth % 3;  // 0=X, 1=Y, 2=Z
+    node->IsLeaf = false;
+
+    // Условия остановки: мало объектов или достигли максимальной глубины
+    if (indices.size() <= MIN_CUBES_PER_NODE || depth >= MAX_KD_DEPTH)
+    {
+        node->IsLeaf = true;
+        node->CubeIndices = std::move(indices);
+        return;
+    }
+
+    // Сортируем по центру AABB (более точно, чем по позиции)
+    if (node->Axis == 0) // X
+    {
+        std::sort(indices.begin(), indices.end(), [this](int a, int b) {
+            float centerA = (m_cubeAABBs[a].Min.x + m_cubeAABBs[a].Max.x) * 0.5f;
+            float centerB = (m_cubeAABBs[b].Min.x + m_cubeAABBs[b].Max.x) * 0.5f;
+            return centerA < centerB;
+            });
+    }
+    else if (node->Axis == 1) // Y
+    {
+        std::sort(indices.begin(), indices.end(), [this](int a, int b) {
+            float centerA = (m_cubeAABBs[a].Min.y + m_cubeAABBs[a].Max.y) * 0.5f;
+            float centerB = (m_cubeAABBs[b].Min.y + m_cubeAABBs[b].Max.y) * 0.5f;
+            return centerA < centerB;
+            });
+    }
+    else // Z
+    {
+        std::sort(indices.begin(), indices.end(), [this](int a, int b) {
+            float centerA = (m_cubeAABBs[a].Min.z + m_cubeAABBs[a].Max.z) * 0.5f;
+            float centerB = (m_cubeAABBs[b].Min.z + m_cubeAABBs[b].Max.z) * 0.5f;
+            return centerA < centerB;
+            });
+    }
+
+    // Медиана
+    size_t mid = indices.size() / 2;
+
+    // Получаем позицию разделения
+    if (node->Axis == 0)
+        node->SplitPos = (m_cubeAABBs[indices[mid]].Min.x + m_cubeAABBs[indices[mid]].Max.x) * 0.5f;
+    else if (node->Axis == 1)
+        node->SplitPos = (m_cubeAABBs[indices[mid]].Min.y + m_cubeAABBs[indices[mid]].Max.y) * 0.5f;
+    else
+        node->SplitPos = (m_cubeAABBs[indices[mid]].Min.z + m_cubeAABBs[indices[mid]].Max.z) * 0.5f;
+
+    // Разделяем индексы
+    std::vector<int> leftIndices, rightIndices;
+    for (int idx : indices)
+    {
+        float center;
+        if (node->Axis == 0)
+            center = (m_cubeAABBs[idx].Min.x + m_cubeAABBs[idx].Max.x) * 0.5f;
+        else if (node->Axis == 1)
+            center = (m_cubeAABBs[idx].Min.y + m_cubeAABBs[idx].Max.y) * 0.5f;
+        else
+            center = (m_cubeAABBs[idx].Min.z + m_cubeAABBs[idx].Max.z) * 0.5f;
+
+        if (center < node->SplitPos)
+            leftIndices.push_back(idx);
+        else
+            rightIndices.push_back(idx);
+    }
+
+    // Создаем границы для детей
+    AABB leftBounds = bounds;
+    AABB rightBounds = bounds;
+
+    if (node->Axis == 0)
+    {
+        leftBounds.Max.x = node->SplitPos;
+        rightBounds.Min.x = node->SplitPos;
+    }
+    else if (node->Axis == 1)
+    {
+        leftBounds.Max.y = node->SplitPos;
+        rightBounds.Min.y = node->SplitPos;
+    }
+    else
+    {
+        leftBounds.Max.z = node->SplitPos;
+        rightBounds.Min.z = node->SplitPos;
+    }
+
+    // Рекурсивно строим детей
+    if (!leftIndices.empty())
+    {
+        node->Left = std::make_unique<KDTreeNode>();
+        BuildKDTreeNode(node->Left, leftIndices, leftBounds, depth + 1);
+    }
+    if (!rightIndices.empty())
+    {
+        node->Right = std::make_unique<KDTreeNode>();
+        BuildKDTreeNode(node->Right, rightIndices, rightBounds, depth + 1);
+    }
+}
+
+bool DirectXApp::IsAABBInFrustum(const AABB& aabb, const Frustum& frustum) const
+{
+    for (int i = 0; i < 6; ++i)
+    {
+        const XMFLOAT4& plane = frustum.Planes[i];
+
+        float px = (plane.x > 0.0f) ? aabb.Max.x : aabb.Min.x;
+        float py = (plane.y > 0.0f) ? aabb.Max.y : aabb.Min.y;
+        float pz = (plane.z > 0.0f) ? aabb.Max.z : aabb.Min.z;
+
+        float distance = plane.x * px + plane.y * py + plane.z * pz + plane.w;
+
+        if (distance < 0.0f)
+            return false;
+    }
+    return true;
+}
+
+void DirectXApp::CullKDTree(KDTreeNode* node, const Frustum& frustum, std::vector<int>& outVisible)
+{
+    if (!node) return;
+
+    // Используем переданный frustum
+    if (!IsAABBInFrustum(node->Bounds, frustum))
+        return;
+
+    if (node->IsLeaf)
+    {
+        for (int idx : node->CubeIndices)
+        {
+            if (IsAABBInFrustum(m_cubeAABBs[idx], frustum))
+                outVisible.push_back(idx);
+        }
+    }
+    else
+    {
+        CullKDTree(node->Left.get(), frustum, outVisible);
+        CullKDTree(node->Right.get(), frustum, outVisible);
+    }
+}
+
+void DirectXApp::CreateInstancedPipeline()
+{
+    wchar_t exePath[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    std::wstring filePath(exePath);
+    filePath = filePath.substr(0, filePath.find_last_of(L"\\/") + 1) + L"shaders.hlsl";
+
+    auto vs = CompileShaderFile(filePath, "CubeVSInstanced", "vs_5_0");
+    auto ps = CompileShaderFile(filePath, "CubePSInstanced", "ps_5_0");
+
+    // Input layout - теперь семантики совпадают с шейдером
+    D3D12_INPUT_ELEMENT_DESC inputLayout[] =
+    {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 48, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "BINORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 60, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+
+        { "INSTANCEPOS", 0, DXGI_FORMAT_R32G32B32_FLOAT, 1, 0, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
+        { "INSTANCESCALE", 0, DXGI_FORMAT_R32_FLOAT, 1, 12, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
+        { "INSTANCECOLOR", 0, DXGI_FORMAT_R32G32B32_FLOAT, 1, 16, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
+        { "INSTANCEPADDING", 0, DXGI_FORMAT_R32_FLOAT, 1, 28, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
+    };
+
+    D3D12_RASTERIZER_DESC rasterizerDesc = {};
+    rasterizerDesc.FillMode = D3D12_FILL_MODE_SOLID;
+    rasterizerDesc.CullMode = D3D12_CULL_MODE_BACK;
+    rasterizerDesc.FrontCounterClockwise = FALSE;
+    rasterizerDesc.DepthClipEnable = TRUE;
+
+    D3D12_DEPTH_STENCIL_DESC depthStencilDesc = {};
+    depthStencilDesc.DepthEnable = TRUE;
+    depthStencilDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    depthStencilDesc.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+
+    D3D12_BLEND_DESC blendDesc = {};
+    blendDesc.AlphaToCoverageEnable = FALSE;
+    blendDesc.IndependentBlendEnable = FALSE;
+    for (UINT i = 0; i < 8; ++i)
+    {
+        blendDesc.RenderTarget[i].BlendEnable = FALSE;
+        blendDesc.RenderTarget[i].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    }
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+    psoDesc.InputLayout = { inputLayout, _countof(inputLayout) };
+    psoDesc.pRootSignature = m_rootSignature.Get();
+    psoDesc.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
+    psoDesc.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
+    psoDesc.RasterizerState = rasterizerDesc;
+    psoDesc.BlendState = blendDesc;
+    psoDesc.DepthStencilState = depthStencilDesc;
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets = GBuffer::TargetCount;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.RTVFormats[1] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    psoDesc.RTVFormats[2] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    psoDesc.RTVFormats[3] = DXGI_FORMAT_R32_FLOAT;
+    psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+    psoDesc.SampleDesc = { 1, 0 };
+
+    HRESULT hr = m_d3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_instancedPipelineState));
+
+    if (FAILED(hr))
+    {
+        // Если не удалось, выводим ошибку и отключаем инстансинг
+        MessageBoxA(m_windowHandle, "Failed to create instanced pipeline state!\nFalling back to non-instanced rendering.", "Warning", MB_OK | MB_ICONWARNING);
+        m_useInstancing = false;
+    }
+    else
+    {
+        m_useInstancing = true;
+    }
+}
+
+void DirectXApp::CreateInstanceBuffer()
+{
+    // Буфер для хранения данных инстансов (максимальный размер)
+    UINT64 bufferSize = sizeof(InstanceData) * CUBE_COUNT;
+
+    D3D12_HEAP_PROPERTIES defaultHeapProps = {};
+    defaultHeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    D3D12_RESOURCE_DESC bufferDesc = {};
+    bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufferDesc.Width = bufferSize;
+    bufferDesc.Height = 1;
+    bufferDesc.DepthOrArraySize = 1;
+    bufferDesc.MipLevels = 1;
+    bufferDesc.SampleDesc = { 1, 0 };
+    bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    ThrowIfFailed(m_d3dDevice->CreateCommittedResource(
+        &defaultHeapProps, D3D12_HEAP_FLAG_NONE, &bufferDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&m_instanceBuffer)));
+
+    // Upload buffer
+    D3D12_HEAP_PROPERTIES uploadHeapProps = {};
+    uploadHeapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+    ThrowIfFailed(m_d3dDevice->CreateCommittedResource(
+        &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &bufferDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&m_instanceUploadBuffer)));
+
+    m_instanceBufferView.BufferLocation = m_instanceBuffer->GetGPUVirtualAddress();
+    m_instanceBufferView.SizeInBytes = static_cast<UINT>(bufferSize);
+    m_instanceBufferView.StrideInBytes = sizeof(InstanceData);
+
+    m_visibleInstanceData.resize(CUBE_COUNT);
+}
+
+void DirectXApp::UpdateInstanceBuffer(const std::vector<int>& visibleIndices)
+{
+    // Заполняем данные только для видимых кубов
+    for (size_t i = 0; i < visibleIndices.size(); ++i)
+    {
+        int idx = visibleIndices[i];
+        m_visibleInstanceData[i].Position = m_cubes[idx].Position;
+        m_visibleInstanceData[i].Scale = m_cubes[idx].Scale;
+        m_visibleInstanceData[i].Color = m_cubes[idx].Color;
+        m_visibleInstanceData[i].Padding = 0.0f;
+    }
+
+    UINT64 dataSize = visibleIndices.size() * sizeof(InstanceData);
+
+    // Копируем в upload buffer
+    void* mappedData = nullptr;
+    m_instanceUploadBuffer->Map(0, nullptr, &mappedData);
+    memcpy(mappedData, m_visibleInstanceData.data(), (size_t)dataSize);
+    m_instanceUploadBuffer->Unmap(0, nullptr);
+
+    // Копируем в default buffer
+    m_cmdList->CopyBufferRegion(m_instanceBuffer.Get(), 0,
+        m_instanceUploadBuffer.Get(), 0, dataSize);
 }

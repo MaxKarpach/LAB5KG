@@ -293,8 +293,7 @@ struct DS_OUT
     float4 Color : COLOR;
     float2 Tex : TEXCOORD;
 };
-// Vertex Shader
-// Vertex Shader
+
 HS_OUT VS(VS_IN input)
 {
     HS_OUT output;
@@ -380,15 +379,10 @@ DS_OUT DS(HS_CONST input, float3 bary : SV_DomainLocation, const OutputPatch<HS_
                  bary.y * patch[1].Tex +
                  bary.z * patch[2].Tex;
     
-    // ===== DISPLACEMENT MAPPING =====
-    // Простой Sample (без LOD)
-    // ===== DISPLACEMENT MAPPING - ТОЛЬКО ЧТЕНИЕ =====
     float height = gDisplacementMap.Sample(gSampler, tex).r;
-    // ПОКА НЕ СМЕЩАЕМ
     float displacement = (height - 0.5f) * DisplacementStrength;
    //  worldPos += normal * displacement;
     
-    // В клип
     float4 viewPos = mul(float4(worldPos, 1), View);
     output.Pos = mul(viewPos, Proj);
     
@@ -401,8 +395,7 @@ DS_OUT DS(HS_CONST input, float3 bary : SV_DomainLocation, const OutputPatch<HS_
     
     return output;
 }
-// Pixel Shader
-// Pixel Shader с normal mapping
+
 float4 PS(DS_OUT input) : SV_TARGET
 {
     float3 normalMap = gNormalMap.Sample(gSampler, input.Tex).rgb;
@@ -460,8 +453,8 @@ struct TessDS_Output
     float4 PosH : SV_POSITION;
     float3 WorldPos : TEXCOORD0;
     float3 NormalW : TEXCOORD1;
-    float3 TangentW : TEXCOORD4; // ДОБАВИТЬ
-    float3 BinormalW : TEXCOORD5; // ДОБАВИТЬ
+    float3 TangentW : TEXCOORD4;
+    float3 BinormalW : TEXCOORD5;
     float2 UV : TEXCOORD2;
     float ViewDepth : TEXCOORD3;
 };
@@ -471,8 +464,8 @@ struct TessGeometryPSInput
     float4 PosH : SV_POSITION;
     float3 WorldPos : TEXCOORD0;
     float3 NormalW : TEXCOORD1;
-    float3 TangentW : TEXCOORD4; // ДОБАВИТЬ
-    float3 BinormalW : TEXCOORD5; // ДОБАВИТЬ
+    float3 TangentW : TEXCOORD4;
+    float3 BinormalW : TEXCOORD5; 
     float2 UV : TEXCOORD2;
     float ViewDepth : TEXCOORD3;
 };
@@ -494,7 +487,6 @@ TessHS_OUT TessVS(VS_IN input)
     return output;
 }
 
-// Hull Shader - константы патча (ИСПРАВЛЕНО)
 TessHS_CONST TessHSConst(InputPatch<TessHS_OUT, 3> ip, uint pid : SV_PrimitiveID)
 {
     TessHS_CONST output;
@@ -540,13 +532,11 @@ TessDS_Output TessDS(TessHS_CONST input, float3 bary : SV_DomainLocation, const 
     
     normal = normalize(normal);
     
-    // КЛЮЧЕВОЕ: зажимаем UV в допустимый диапазон
     float2 clampedTex = clamp(tex, 0.001f, 0.999f);
     
     // Используем SampleLevel с LOD = 0
     float height = gDisplacementMap.SampleLevel(gSampler, clampedTex, 0).r;
     
-    // Используем очень маленькое смещение для теста
   //  float displacement = (height - 0.5f) * 0.01f; // Временно 0.01
     
     // Временно используем ВОЛНУ вместо текстуры для проверки
@@ -879,8 +869,6 @@ CubeVSOutput CubeVSMain(VSInput input)
     return output;
 }
 
-// Добавить в самый конец файла shaders.hlsl
-
 struct CubePSInput
 {
     float4 PosH : SV_POSITION;
@@ -896,6 +884,132 @@ GBufferOutput CubePSMain(CubePSInput input)
     
     // Ярко-синий цвет
     float4 albedo = float4(0.0f, 0.0f, 1.0f, 1.0f);
+    
+    float3 normal = normalize(input.NormalW);
+    float depth = saturate(input.ViewDepth / 100.0f);
+    
+    o.AlbedoSpec = albedo;
+    o.WorldPos = float4(input.WorldPos, 1.0f);
+    o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
+    o.Depth = float4(depth, depth, depth, 1.0f);
+    
+    return o;
+}
+
+// ========== ИНСТАНСИНГ ДЛЯ КУБОВ ==========
+
+struct CubeVSInstancedInput
+{
+    float3 Position : POSITION;
+    float3 Normal : NORMAL;
+    float4 Color : COLOR;
+    float2 TexCoord : TEXCOORD;
+    float3 Tangent : TANGENT;
+    float3 Binormal : BINORMAL;
+    
+    // Instance data
+    float3 InstancePos : INSTANCE_POS;
+    float InstanceScale : INSTANCE_SCALE;
+    float3 InstanceColor : INSTANCE_COLOR;
+    float InstancePadding : TEXCOORD3;
+};
+
+struct CubeVSInstancedOutput
+{
+    float4 PosH : SV_POSITION;
+    float3 WorldPos : TEXCOORD0;
+    float3 NormalW : TEXCOORD1;
+    float2 UV : TEXCOORD2;
+    float ViewDepth : TEXCOORD3;
+    float4 Color : COLOR;
+};
+
+CubeVSInstancedOutput CubeVSInstanced(CubeVSInstancedInput input)
+{
+    CubeVSInstancedOutput output;
+    
+    // Масштабируем позицию
+    float3 scaledPos = input.Position * input.InstanceScale;
+    float3 worldPos = scaledPos + input.InstancePos;
+    
+    float4 viewPos = mul(float4(worldPos, 1.0f), View);
+    output.PosH = mul(viewPos, Proj);
+    output.WorldPos = worldPos;
+    output.NormalW = normalize(mul(float4(input.Normal, 0.0f), World).xyz);
+    output.UV = input.TexCoord;
+    output.ViewDepth = viewPos.z;
+    output.Color = float4(input.InstanceColor, 1.0f);
+    
+    return output;
+}
+
+GBufferOutput CubePSInstanced(CubeVSInstancedOutput input) : SV_TARGET
+{
+    GBufferOutput o;
+    
+    float4 albedo = input.Color;
+    
+    float3 normal = normalize(input.NormalW);
+    float depth = saturate(input.ViewDepth / 100.0f);
+    
+    o.AlbedoSpec = albedo;
+    o.WorldPos = float4(input.WorldPos, 1.0f);
+    o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
+    o.Depth = float4(depth, depth, depth, 1.0f);
+    
+    return o;
+}
+
+struct VSInstancedInput
+{
+    float3 Position : POSITION;
+    float3 Normal : NORMAL;
+    float4 Color : COLOR;
+    float2 TexCoord : TEXCOORD;
+    float3 Tangent : TANGENT;
+    float3 Binormal : BINORMAL;
+    
+    // Per-instance data - используем уникальные семантики
+    float3 InstancePos : INSTANCEPOS;
+    float InstanceScale : INSTANCESCALE;
+    float3 InstanceColor : INSTANCECOLOR;
+    float InstancePadding : INSTANCEPADDING;
+};
+
+struct VSInstancedOutput
+{
+    float4 PosH : SV_POSITION;
+    float3 WorldPos : TEXCOORD0;
+    float3 NormalW : TEXCOORD1;
+    float2 UV : TEXCOORD2;
+    float ViewDepth : TEXCOORD3;
+    float4 Color : COLOR;
+};
+
+VSInstancedOutput CubeVSInstanced(VSInstancedInput input)
+{
+    VSInstancedOutput output;
+    
+    // Масштабируем позицию
+    float3 scaledPos = input.Position * input.InstanceScale;
+    float3 worldPos = scaledPos + input.InstancePos;
+    
+    float4 viewPos = mul(float4(worldPos, 1.0f), View);
+    output.PosH = mul(viewPos, Proj);
+    output.WorldPos = worldPos;
+    output.NormalW = normalize(mul(float4(input.Normal, 0.0f), World).xyz);
+    output.UV = input.TexCoord;
+    output.ViewDepth = viewPos.z;
+    output.Color = float4(input.InstanceColor, 1.0f);
+    
+    return output;
+}
+
+GBufferOutput CubePSInstanced(VSInstancedOutput input) : SV_TARGET
+{
+    GBufferOutput o;
+    
+    float4 albedo = input.Color;
     
     float3 normal = normalize(input.NormalW);
     float depth = saturate(input.ViewDepth / 100.0f);

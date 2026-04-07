@@ -46,33 +46,12 @@ struct DynamicLight
     bool Active;
 };
 
-// Types.h - добавить после существующих структур
-
-// Инстансинг: данные для каждого экземпляра объекта
+// В Types.h добавьте:
 struct InstanceData
 {
-    DirectX::XMFLOAT4X4 WorldMatrix;
-    DirectX::XMFLOAT4 ColorModulation;  // Для вариации цвета
-    DirectX::XMFLOAT4 CustomData;       // x: scale, y: emission, z: reflection, w: custom
+    DirectX::XMFLOAT3 Position;
+    float Scale;
+    DirectX::XMFLOAT3 Color;
+    float Padding; // Для выравнивания до 16 байт
 };
-
-// Сцена: коллекция инстансов
-struct SceneObject
-{
-    std::string Name;
-    std::vector<InstanceData> Instances;
-    DirectX::XMFLOAT3 BasePosition;
-    int InstanceCount;
-};
-
-// Пул объектов для случайной генерации
-struct ObjectPool
-{
-    std::vector<InstanceData> Instances;
-    DirectX::XMFLOAT3 SpawnAreaMin;
-    DirectX::XMFLOAT3 SpawnAreaMax;
-    float MinScale;
-    float MaxScale;
-};
-
 const int MAX_DYNAMIC_LIGHTS = 256;
