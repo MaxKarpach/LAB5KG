@@ -16,7 +16,7 @@ struct Material
 
 // ---- Helper: split "v/vt/vn" token into component indices -----------
 static void ParseFaceVert(const std::string& token,
-                           int& p, int& t, int& n)
+    int& p, int& t, int& n)
 {
     p = t = n = 0;
     std::vector<std::string> parts;
@@ -46,7 +46,7 @@ LoadMtl(const std::wstring& mtlPath, const std::wstring& dir)
     std::ifstream f(mtlPath);
     if (!f) return mats;
 
-    Material*   cur = NULL;
+    Material* cur = NULL;
     std::string line;
     while (std::getline(f, line))
     {
@@ -157,7 +157,7 @@ ObjResult LoadObj(const std::wstring& path)
                 // Handle negative (relative) indices
                 if (p < 0) p = (int)positions.size() + p + 1;
                 if (t < 0) t = (int)texcoords.size() + t + 1;
-                if (n < 0) n = (int)normals.size()   + n + 1;
+                if (n < 0) n = (int)normals.size() + n + 1;
 
                 pIdx.push_back(p);
                 tIdx.push_back(t);
@@ -174,8 +174,8 @@ ObjResult LoadObj(const std::wstring& path)
                     int j = fan[fi];
                     Vertex v;
                     v.Position = XMFLOAT3(0, 0, 0);
-                    v.Normal   = XMFLOAT3(0, 1, 0);
-                    v.Color    = curMat.diffuse;
+                    v.Normal = XMFLOAT3(0, 1, 0);
+                    v.Color = curMat.diffuse;
                     v.TexCoord = XMFLOAT2(0, 0);
 
                     int pi = pIdx[j];
