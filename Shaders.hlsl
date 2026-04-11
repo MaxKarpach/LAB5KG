@@ -1051,3 +1051,203 @@ float4 LinePS(LinePSInput input) : SV_TARGET
 {
     return input.Color;
 }
+
+// ========== LOD1 MESH (Simplified - no tangents) ==========
+struct LOD1VSInput
+{
+    float3 Position : POSITION;
+    float3 Normal : NORMAL;
+    float4 Color : COLOR;
+    float2 TexCoord : TEXCOORD;
+};
+
+struct LOD1VSOutput
+{
+    float4 PosH : SV_POSITION;
+    float3 WorldPos : TEXCOORD0;
+    float3 NormalW : TEXCOORD1;
+    float2 UV : TEXCOORD2;
+    float ViewDepth : TEXCOORD3;
+    float4 Color : COLOR;
+};
+
+LOD1VSOutput LOD1VSMain(LOD1VSInput input)
+{
+    LOD1VSOutput output;
+    
+    float4 worldPos = mul(float4(input.Position, 1.0f), World);
+    float4 viewPos = mul(worldPos, View);
+    output.PosH = mul(viewPos, Proj);
+    output.WorldPos = worldPos.xyz;
+    output.NormalW = normalize(mul(float4(input.Normal, 0.0f), World).xyz);
+    output.UV = input.TexCoord;
+    output.ViewDepth = viewPos.z;
+    output.Color = input.Color;
+    
+    return output;
+}
+
+GBufferOutput LOD1PSMain(LOD1VSOutput input)
+{
+    GBufferOutput o;
+    
+    float4 albedo = input.Color;
+    
+    float3 normal = normalize(input.NormalW);
+    float depth = saturate(input.ViewDepth / 100.0f);
+    
+    o.AlbedoSpec = albedo;
+    o.WorldPos = float4(input.WorldPos, 1.0f);
+    o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
+    o.Depth = float4(depth, depth, depth, 1.0f);
+    
+    return o;
+}
+
+// ========== LOD2 MESH (Position only) ==========
+struct LOD2VSInput
+{
+    float3 Position : POSITION;
+};
+
+struct LOD2VSOutput
+{
+    float4 PosH : SV_POSITION;
+    float3 WorldPos : TEXCOORD0;
+    float ViewDepth : TEXCOORD3;
+};
+
+LOD2VSOutput LOD2VSMain(LOD2VSInput input)
+{
+    LOD2VSOutput output;
+    
+    float4 worldPos = mul(float4(input.Position, 1.0f), World);
+    float4 viewPos = mul(worldPos, View);
+    output.PosH = mul(viewPos, Proj);
+    output.WorldPos = worldPos.xyz;
+    output.ViewDepth = viewPos.z;
+    
+    return output;
+}
+
+GBufferOutput LOD2PSMain(LOD2VSOutput input)
+{
+    GBufferOutput o;
+    
+    // Use distance-based color for LOD2
+    float depth = saturate(input.ViewDepth / 100.0f);
+    float4 albedo = float4(depth, depth * 0.5f, 1.0f - depth, 1.0f);
+    
+    o.AlbedoSpec = albedo;
+    o.WorldPos = float4(input.WorldPos, 1.0f);
+    o.Normal = float4(0.5f, 0.5f, 1.0f, 1.0f);
+    o.Depth = float4(depth, depth, depth, 1.0f);
+    
+    return o;
+}
+
+struct LOD1VSInstancedInput
+{
+    float3 Position : POSITION;
+    float3 Normal : NORMAL;
+    float4 Color : COLOR;
+    float2 TexCoord : TEXCOORD;
+    
+    float3 InstancePos : INSTANCEPOS;
+    float InstanceScale : INSTANCESCALE;
+    float3 InstanceColor : INSTANCECOLOR;
+    float InstancePadding : INSTANCEPADDING;
+};
+
+struct LOD1VSInstancedOutput
+{
+    float4 PosH : SV_POSITION;
+    float3 WorldPos : TEXCOORD0;
+    float3 NormalW : TEXCOORD1;
+    float2 UV : TEXCOORD2;
+    float ViewDepth : TEXCOORD3;
+    float4 Color : COLOR;
+};
+
+LOD1VSInstancedOutput LOD1VSInstanced(LOD1VSInstancedInput input)
+{
+    LOD1VSInstancedOutput output;
+    
+    float3 scaledPos = input.Position * input.InstanceScale;
+    float3 worldPos = scaledPos + input.InstancePos;
+    
+    float4 viewPos = mul(float4(worldPos, 1.0f), View);
+    output.PosH = mul(viewPos, Proj);
+    output.WorldPos = worldPos;
+    output.NormalW = normalize(mul(float4(input.Normal, 0.0f), World).xyz);
+    output.UV = input.TexCoord;
+    output.ViewDepth = viewPos.z;
+    output.Color = float4(input.InstanceColor, 1.0f);
+    
+    return output;
+}
+
+GBufferOutput LOD1PSInstanced(LOD1VSInstancedOutput input)
+{
+    GBufferOutput o;
+    
+    float4 albedo = input.Color;
+    float3 normal = normalize(input.NormalW);
+    float depth = saturate(input.ViewDepth / 100.0f);
+    
+    o.AlbedoSpec = albedo;
+    o.WorldPos = float4(input.WorldPos, 1.0f);
+    o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
+    o.Depth = float4(depth, depth, depth, 1.0f);
+    
+    return o;
+}
+
+struct LOD2VSInstancedInput
+{
+    float3 Position : POSITION;
+    
+    float3 InstancePos : INSTANCEPOS;
+    float InstanceScale : INSTANCESCALE;
+    float3 InstanceColor : INSTANCECOLOR;
+    float InstancePadding : INSTANCEPADDING;
+};
+
+struct LOD2VSInstancedOutput
+{
+    float4 PosH : SV_POSITION;
+    float3 WorldPos : TEXCOORD0;
+    float ViewDepth : TEXCOORD3;
+    float4 Color : COLOR;
+};
+
+LOD2VSInstancedOutput LOD2VSInstanced(LOD2VSInstancedInput input)
+{
+    LOD2VSInstancedOutput output;
+    
+    float3 scaledPos = input.Position * input.InstanceScale;
+    float3 worldPos = scaledPos + input.InstancePos;
+    
+    float4 viewPos = mul(float4(worldPos, 1.0f), View);
+    output.PosH = mul(viewPos, Proj);
+    output.WorldPos = worldPos;
+    output.ViewDepth = viewPos.z;
+    output.Color = float4(input.InstanceColor, 1.0f);
+    
+    return output;
+}
+
+GBufferOutput LOD2PSInstanced(LOD2VSInstancedOutput input)
+{
+    GBufferOutput o;
+    
+    float depth = saturate(input.ViewDepth / 100.0f);
+    float4 albedo = float4(depth, depth * 0.5f, 1.0f - depth, 1.0f);
+    
+    o.AlbedoSpec = albedo;
+    o.WorldPos = float4(input.WorldPos, 1.0f);
+    o.Normal = float4(0.5f, 0.5f, 1.0f, 1.0f);
+    o.Depth = float4(depth, depth, depth, 1.0f);
+    
+    return o;
+}

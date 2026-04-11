@@ -373,7 +373,7 @@ private:
     };
 
     // Флаги для управления рендером
-    const bool renderSponza = true;
+    const bool renderSponza = false;
     const bool renderWater = true;
 
     // Визуализация KD-дерева
@@ -400,6 +400,7 @@ private:
     bool m_prevCKey = false;
     bool m_prevVKey = false;
 
+
     void CreateInstancedPipeline();
     void CreateInstanceBuffer();
     void UpdateInstanceBuffer(const std::vector<int>& visibleIndices);
@@ -412,4 +413,45 @@ private:
 
     // Буфер для временного хранения данных видимых инстансов
     std::vector<InstanceData> m_visibleInstanceData;
+    void UpdateCubeColorsByDistance();
+
+// LOD уровни для кубов
+    ComPtr<ID3D12Resource> m_lod0VertexBuffer;  // Полный куб (24 вершины, 12 треугольников)
+    ComPtr<ID3D12Resource> m_lod0IndexBuffer;
+    D3D12_VERTEX_BUFFER_VIEW m_lod0VertexBufferView;
+    D3D12_INDEX_BUFFER_VIEW m_lod0IndexBufferView;
+    UINT m_lod0IndexCount;
+
+    ComPtr<ID3D12Resource> m_lod1VertexBuffer;  // Средний куб (8 вершин, 6 треугольников - без нормалей)
+    ComPtr<ID3D12Resource> m_lod1IndexBuffer;
+    D3D12_VERTEX_BUFFER_VIEW m_lod1VertexBufferView;
+    D3D12_INDEX_BUFFER_VIEW m_lod1IndexBufferView;
+    UINT m_lod1IndexCount;
+
+    ComPtr<ID3D12Resource> m_lod2VertexBuffer;  // Простой куб (8 вершин, 12 треугольников - без текстур)
+    ComPtr<ID3D12Resource> m_lod2IndexBuffer;
+    D3D12_VERTEX_BUFFER_VIEW m_lod2VertexBufferView;
+    D3D12_INDEX_BUFFER_VIEW m_lod2IndexBufferView;
+    UINT m_lod2IndexCount;
+
+
+    // Функции создания LOD мешей
+    void CreateLOD0Mesh();  // Полный куб с нормалями, текстурой, tangent/binormal
+    void CreateLOD1Mesh();  // Упрощенный куб (только позиция + цвет)
+    void CreateLOD2Mesh();  // Самый простой куб (только позиция)
+
+    ComPtr<ID3D12PipelineState> m_lod0PipelineState;
+    ComPtr<ID3D12PipelineState> m_lod1PipelineState;
+    ComPtr<ID3D12PipelineState> m_lod2PipelineState;
+
+    // Функция определения LOD по расстоянию
+    int GetLODLevel(float distance);
+
+    ComPtr<ID3D12Resource> m_instanceBuffers[3];
+    ComPtr<ID3D12Resource> m_instanceUploadBuffers[3];
+    D3D12_VERTEX_BUFFER_VIEW m_instanceBufferViews[3];
+
+    // Функция обновления буфера для конкретного LOD
+    void UpdateInstanceBufferForLOD(int lod, const std::vector<int>& indices);
+
 };
