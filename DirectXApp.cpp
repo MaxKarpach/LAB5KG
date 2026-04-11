@@ -3,6 +3,7 @@
 #include <cassert>
 #include <memory>
 #include <DirectXMath.h>
+#include <functional>
 using namespace DirectX;
 
 // Constructor / Destructor
@@ -1330,6 +1331,7 @@ void DirectXApp::RenderDeferredFrame()
 
     RenderGeometryPass();
     RenderLightingPass();
+    RenderKDTreeLines();
 
     barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
     barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
@@ -1645,8 +1647,9 @@ bool DirectXApp::Initialize()
             );
         }
 
-        // Строим KD-дерево для culling
         BuildKDTree();
+        BuildKDTreeLines();
+        CreateKDLinePipeline();
 
         ThrowIfFailed(m_cmdList->Close());
         ID3D12CommandList* commandLists[] = { m_cmdList.Get() };
@@ -2695,4 +2698,200 @@ void DirectXApp::UpdateInstanceBuffer(const std::vector<int>& visibleIndices)
     // Копируем в default buffer
     m_cmdList->CopyBufferRegion(m_instanceBuffer.Get(), 0,
         m_instanceUploadBuffer.Get(), 0, dataSize);
+}
+
+void DirectXApp::CreateKDLinePipeline()
+{
+    wchar_t exePath[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    std::wstring filePath(exePath);
+    filePath = filePath.substr(0, filePath.find_last_of(L"\\/") + 1) + L"shaders.hlsl";
+
+    auto vs = CompileShaderFile(filePath, "LineVS", "vs_5_0");
+    auto ps = CompileShaderFile(filePath, "LinePS", "ps_5_0");
+
+    D3D12_ROOT_PARAMETER rootParam = {};
+    rootParam.ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rootParam.Descriptor.ShaderRegister = 0;
+    rootParam.Descriptor.RegisterSpace = 0;
+    rootParam.ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+
+    D3D12_ROOT_SIGNATURE_DESC rootDesc = {};
+    rootDesc.NumParameters = 1;
+    rootDesc.pParameters = &rootParam;
+    rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    ComPtr<ID3DBlob> sigBlob, errorBlob;
+    HRESULT hr = D3D12SerializeRootSignature(&rootDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errorBlob);
+    if (FAILED(hr))
+    {
+        if (errorBlob) MessageBoxA(m_windowHandle, (char*)errorBlob->GetBufferPointer(), "Root Sig Error", MB_OK);
+        ThrowIfFailed(hr);
+    }
+    ThrowIfFailed(m_d3dDevice->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&m_kdLineRootSignature)));
+
+    D3D12_INPUT_ELEMENT_DESC inputLayout[] = {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+    };
+
+    D3D12_RASTERIZER_DESC rasterizerDesc = {};
+    rasterizerDesc.FillMode = D3D12_FILL_MODE_SOLID;
+    rasterizerDesc.CullMode = D3D12_CULL_MODE_NONE;
+    rasterizerDesc.FrontCounterClockwise = FALSE;
+    rasterizerDesc.DepthBias = 0;
+    rasterizerDesc.DepthBiasClamp = 0.0f;
+    rasterizerDesc.SlopeScaledDepthBias = 0.0f;
+    rasterizerDesc.DepthClipEnable = TRUE;
+    rasterizerDesc.MultisampleEnable = FALSE;
+    rasterizerDesc.AntialiasedLineEnable = FALSE;
+    rasterizerDesc.ForcedSampleCount = 0;
+    rasterizerDesc.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
+
+    D3D12_BLEND_DESC blendDesc = {};
+    blendDesc.AlphaToCoverageEnable = FALSE;
+    blendDesc.IndependentBlendEnable = FALSE;
+    for (UINT i = 0; i < 8; ++i)
+    {
+        blendDesc.RenderTarget[i].BlendEnable = FALSE;
+        blendDesc.RenderTarget[i].LogicOpEnable = FALSE;
+        blendDesc.RenderTarget[i].SrcBlend = D3D12_BLEND_ONE;
+        blendDesc.RenderTarget[i].DestBlend = D3D12_BLEND_ZERO;
+        blendDesc.RenderTarget[i].BlendOp = D3D12_BLEND_OP_ADD;
+        blendDesc.RenderTarget[i].SrcBlendAlpha = D3D12_BLEND_ONE;
+        blendDesc.RenderTarget[i].DestBlendAlpha = D3D12_BLEND_ZERO;
+        blendDesc.RenderTarget[i].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        blendDesc.RenderTarget[i].LogicOp = D3D12_LOGIC_OP_NOOP;
+        blendDesc.RenderTarget[i].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    }
+
+    D3D12_DEPTH_STENCIL_DESC depthStencilDesc = {};
+    depthStencilDesc.DepthEnable = TRUE;
+    depthStencilDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    depthStencilDesc.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+    depthStencilDesc.StencilEnable = FALSE;
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+    psoDesc.InputLayout = { inputLayout, _countof(inputLayout) };
+    psoDesc.pRootSignature = m_kdLineRootSignature.Get();
+    psoDesc.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
+    psoDesc.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
+    psoDesc.RasterizerState = rasterizerDesc;
+    psoDesc.BlendState = blendDesc;
+    psoDesc.DepthStencilState = depthStencilDesc;
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
+    psoDesc.NumRenderTargets = 1;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+    psoDesc.SampleDesc = { 1, 0 };
+
+    ThrowIfFailed(m_d3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_kdLinePSO)));
+
+    UINT64 cbSize = (sizeof(DirectX::XMMATRIX) + 255) & ~255;
+    D3D12_HEAP_PROPERTIES heapProps = {};
+    heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+    D3D12_RESOURCE_DESC cbDesc = {};
+    cbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    cbDesc.Width = cbSize;
+    cbDesc.Height = 1;
+    cbDesc.DepthOrArraySize = 1;
+    cbDesc.MipLevels = 1;
+    cbDesc.SampleDesc = { 1, 0 };
+    cbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    ThrowIfFailed(m_d3dDevice->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &cbDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&m_kdLineConstantBuffer)));
+    ThrowIfFailed(m_kdLineConstantBuffer->Map(0, nullptr, &m_mappedKDLineCB));
+}
+
+void DirectXApp::RenderKDTreeLines()
+{
+    if (m_cullingMode != CullingMode::Octree || m_kdLineVertexCount == 0)
+        return;
+
+    m_cmdList->SetPipelineState(m_kdLinePSO.Get());
+    m_cmdList->SetGraphicsRootSignature(m_kdLineRootSignature.Get());
+
+    float aspectRatio = (m_screenHeight > 0) ? static_cast<float>(m_screenWidth) / m_screenHeight : 1.0f;
+    DirectX::XMMATRIX view = m_camera.GetViewMatrix();
+    DirectX::XMMATRIX proj = m_camera.GetProjectionMatrix(aspectRatio);
+    DirectX::XMMATRIX viewProj = DirectX::XMMatrixMultiply(view, proj);
+    viewProj = DirectX::XMMatrixTranspose(viewProj);
+    memcpy(m_mappedKDLineCB, &viewProj, sizeof(DirectX::XMMATRIX));
+
+    m_cmdList->SetGraphicsRootConstantBufferView(0, m_kdLineConstantBuffer->GetGPUVirtualAddress());
+    m_cmdList->IASetVertexBuffers(0, 1, &m_kdLineBufferView);
+    m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+    m_cmdList->DrawInstanced(m_kdLineVertexCount, 1, 0, 0);
+}
+
+void DirectXApp::BuildKDTreeLines()
+{
+    if (!m_kdTreeRoot) return;
+
+    struct LineVertex { DirectX::XMFLOAT3 Position; DirectX::XMFLOAT4 Color; };
+    std::vector<LineVertex> vertices;
+
+    std::function<void(KDTreeNode*)> collect = [&](KDTreeNode* node) {
+        if (!node) return;
+
+        const AABB& b = node->Bounds;
+        DirectX::XMFLOAT3 min = b.Min;
+        DirectX::XMFLOAT3 max = b.Max;
+
+        DirectX::XMFLOAT4 color(0.2f, 0.8f, 0.2f, 1.0f);
+
+        vertices.push_back({ {min.x, min.y, min.z}, color });
+        vertices.push_back({ {max.x, min.y, min.z}, color });
+
+        vertices.push_back({ {max.x, min.y, min.z}, color });
+        vertices.push_back({ {max.x, min.y, max.z}, color });
+
+        vertices.push_back({ {max.x, min.y, max.z}, color });
+        vertices.push_back({ {min.x, min.y, max.z}, color });
+
+        vertices.push_back({ {min.x, min.y, max.z}, color });
+        vertices.push_back({ {min.x, min.y, min.z}, color });
+
+        vertices.push_back({ {min.x, max.y, min.z}, color });
+        vertices.push_back({ {max.x, max.y, min.z}, color });
+
+        vertices.push_back({ {max.x, max.y, min.z}, color });
+        vertices.push_back({ {max.x, max.y, max.z}, color });
+
+        vertices.push_back({ {max.x, max.y, max.z}, color });
+        vertices.push_back({ {min.x, max.y, max.z}, color });
+
+        vertices.push_back({ {min.x, max.y, max.z}, color });
+        vertices.push_back({ {min.x, max.y, min.z}, color });
+
+        vertices.push_back({ {min.x, min.y, min.z}, color });
+        vertices.push_back({ {min.x, max.y, min.z}, color });
+
+        vertices.push_back({ {max.x, min.y, min.z}, color });
+        vertices.push_back({ {max.x, max.y, min.z}, color });
+
+        vertices.push_back({ {max.x, min.y, max.z}, color });
+        vertices.push_back({ {max.x, max.y, max.z}, color });
+
+        vertices.push_back({ {min.x, min.y, max.z}, color });
+        vertices.push_back({ {min.x, max.y, max.z}, color });
+
+        collect(node->Left.get());
+        collect(node->Right.get());
+        };
+
+    collect(m_kdTreeRoot.get());
+
+    m_kdLineVertexCount = (UINT)vertices.size();
+    if (m_kdLineVertexCount == 0) return;
+
+    UINT64 bufferSize = vertices.size() * sizeof(LineVertex);
+    CreateUploadBuffer(vertices.data(), bufferSize, m_kdLineVertexBuffer);
+
+    m_kdLineBufferView.BufferLocation = m_kdLineVertexBuffer->GetGPUVirtualAddress();
+    m_kdLineBufferView.SizeInBytes = static_cast<UINT>(bufferSize);
+    m_kdLineBufferView.StrideInBytes = sizeof(LineVertex);
 }

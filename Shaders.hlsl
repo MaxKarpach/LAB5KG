@@ -1021,3 +1021,33 @@ GBufferOutput CubePSInstanced(VSInstancedOutput input) : SV_TARGET
     
     return o;
 }
+
+struct LineVSInput
+{
+    float3 Position : POSITION;
+    float4 Color : COLOR;
+};
+
+struct LinePSInput
+{
+    float4 Position : SV_POSITION;
+    float4 Color : COLOR;
+};
+
+cbuffer LineCB : register(b0)
+{
+    float4x4 ViewProj;
+};
+
+LinePSInput LineVS(LineVSInput input)
+{
+    LinePSInput output;
+    output.Position = mul(float4(input.Position, 1.0f), ViewProj);
+    output.Color = input.Color;
+    return output;
+}
+
+float4 LinePS(LinePSInput input) : SV_TARGET
+{
+    return input.Color;
+}

@@ -373,8 +373,24 @@ private:
     };
 
     // Флаги для управления рендером
-    const bool renderSponza = false;
+    const bool renderSponza = true;
     const bool renderWater = true;
+
+    // Визуализация KD-дерева
+    bool m_showKDTree = true;          // всегда показывать при режиме Octree
+    ComPtr<ID3D12Resource> m_kdLineVertexBuffer;
+    ComPtr<ID3D12Resource> m_kdLineUploadBuffer;   // необязательно, можно один буфер
+    D3D12_VERTEX_BUFFER_VIEW m_kdLineBufferView;
+    UINT m_kdLineVertexCount = 0;
+
+    ComPtr<ID3D12RootSignature> m_kdLineRootSignature;
+    ComPtr<ID3D12PipelineState> m_kdLinePSO;
+    ComPtr<ID3D12Resource> m_kdLineConstantBuffer;
+    void* m_mappedKDLineCB = nullptr;
+
+    void BuildKDTreeLines();                // генерация вершин линий
+    void CreateKDLinePipeline();            // создание PSO и корневой подписи
+    void RenderKDTreeLines();               // отрисовка линий
 
     void SetCullingMode(CullingMode mode);
     CullingMode GetCullingMode() const { return m_cullingMode; }
