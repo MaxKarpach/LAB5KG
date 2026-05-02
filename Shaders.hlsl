@@ -1251,3 +1251,342 @@ GBufferOutput LOD2PSInstanced(LOD2VSInstancedOutput input)
     
     return o;
 }
+
+
+struct Particle
+{
+    float3 Position;
+    float Life;
+    float3 Velocity;
+    float LifeSpan;
+    float4 Color;
+    float Size;
+    float Weight;
+    float Age;
+    float Rotation;
+};
+
+struct SortEntry
+{
+    uint ParticleIndex;
+    float DistanceSq;
+    float Padding0;
+    float Padding1;
+};
+
+RWStructuredBuffer<Particle> g_Particles : register(u0);
+
+#if defined(PARTICLE_INIT) || defined(PARTICLE_UPDATE)
+AppendStructuredBuffer<uint> g_DeadListAppend : register(u1);
+#endif
+
+#if defined(PARTICLE_EMIT)
+ConsumeStructuredBuffer<uint> g_DeadListConsume : register(u1);
+#endif
+
+#if defined(PARTICLE_INIT)
+RWStructuredBuffer<SortEntry> g_SortList : register(u2);
+#endif
+
+#if defined(PARTICLE_UPDATE)
+AppendStructuredBuffer<SortEntry> g_AliveSortList : register(u2);
+#endif
+
+#if defined(PARTICLE_SORT)
+RWStructuredBuffer<SortEntry> g_SortList : register(u2);
+#endif
+
+cbuffer ParticleCb : register(b0)
+{
+    float4 C0;
+    float4 C1;
+    float4 C2;
+    float4 C3;
+    float4 C4;
+    float4 C5;
+    float4 C6;
+};
+
+float HashFloat(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352d;
+    x ^= x >> 15;
+    x *= 0x846ca68b;
+    x ^= x >> 16;
+    return (x & 0x00FFFFFFu) / 16777215.0f;
+}
+
+[numthreads(256,1,1)]
+void ParticleInitDeadListCS(uint3 DTid : SV_DispatchThreadID)
+{
+    uint index = DTid.x;
+    uint maxParticles = asuint(C0.z);
+    if (index >= maxParticles)
+        return;
+
+    Particle p = (Particle)0;
+    p.Life = -1.0f;
+    p.LifeSpan = 0.0f;
+    p.Age = 0.0f;
+    p.Rotation = 0.0f;
+    g_Particles[index] = p;
+
+#if defined(PARTICLE_INIT)
+    SortEntry s;
+    s.ParticleIndex = 0xFFFFFFFFu;
+    s.DistanceSq = -1.0f;
+    s.Padding0 = 0.0f;
+    s.Padding1 = 0.0f;
+    g_SortList[index] = s;
+
+    g_DeadListAppend.Append(index);
+#endif
+}
+
+[numthreads(256,1,1)]
+void ParticleEmitCS(uint3 DTid : SV_DispatchThreadID)
+{
+    uint i = DTid.x;
+
+    float3 emitter = C0.xyz;
+    uint emitCount = asuint(C0.w);
+    float3 baseVel = C1.xyz;
+    float time = C1.w;
+    float3 velRnd = C2.xyz;
+    float minLife = C2.w;
+    float maxLife = C3.x;
+    float minSize = C3.y;
+    float maxSize = C3.z;
+    uint seed = asuint(C3.w);
+    float4 colorA = C4;
+    float4 colorB = C5;
+    float emitterRadius = C6.x;
+
+    if (i >= emitCount)
+        return;
+
+#if defined(PARTICLE_EMIT)
+    uint deadIndex = g_DeadListConsume.Consume();
+
+    uint h0 = i * 1664525u + seed + asuint(time * 1000.0f);
+    uint h1 = h0 * 22695477u + 1u;
+    uint h2 = h1 * 22695477u + 1u;
+
+    float rx = HashFloat(h0) * 2.0f - 1.0f;
+    float ry = HashFloat(h1) * 2.0f - 1.0f;
+    float rz = HashFloat(h2) * 2.0f - 1.0f;
+    float rand0 = HashFloat(h0 ^ 0x68e31da4u);
+    float rand1 = HashFloat(h1 ^ 0xb5297a4du);
+    float randY = HashFloat(h2 ^ 0x1b56c4e9u);
+    float t = HashFloat(h2 ^ 0x9e3779b9u);
+    float angle = rand0 * 6.2831853f;
+    float radius = sqrt(rand1) * emitterRadius;
+
+    Particle p;
+    p.Position = emitter + float3(cos(angle) * radius, randY * 3.0f, sin(angle) * radius);
+    p.Velocity = baseVel + float3(rx * velRnd.x, abs(ry) * velRnd.y, rz * velRnd.z);
+    p.LifeSpan = lerp(minLife, maxLife, t);
+    p.Life = p.LifeSpan;
+    p.Color = lerp(colorA, colorB, t);
+    p.Size = lerp(minSize, maxSize, HashFloat(h1 ^ 0x85ebca6bu));
+    p.Weight = 0.7f + HashFloat(h2 ^ 0xc2b2ae35u) * 0.8f;
+    p.Age = 0.0f;
+    p.Rotation = HashFloat(h0 ^ 0x27d4eb2du) * 6.2831853f;
+
+    g_Particles[deadIndex] = p;
+#endif
+}
+
+[numthreads(256,1,1)]
+void ParticleUpdateCS(uint3 DTid : SV_DispatchThreadID)
+{
+    uint index = DTid.x;
+
+    float dt = C0.x;
+    uint maxParticles = asuint(C0.z);
+    float3 gravity = C1.xyz;
+    float groundY = C1.w;
+    float3 cameraPos = C2.xyz;
+    uint useGround = asuint(C2.w);
+
+    if (index >= maxParticles)
+        return;
+
+    Particle p = g_Particles[index];
+    if (p.Life <= 0.0f)
+        return;
+
+    p.Age += dt;
+    p.Life -= dt;
+    p.Velocity += gravity * p.Weight * dt;
+    p.Position += p.Velocity * dt;
+
+    if (p.Life <= 0.0f || (useGround != 0 && p.Position.y <= groundY))
+    {
+        p.Life = -1.0f;
+        g_Particles[index] = p;
+#if defined(PARTICLE_UPDATE)
+        g_DeadListAppend.Append(index);
+#endif
+        return;
+    }
+
+    g_Particles[index] = p;
+
+#if defined(PARTICLE_UPDATE)
+    float3 toCam = p.Position - cameraPos;
+
+    SortEntry s;
+    s.ParticleIndex = index;
+    s.DistanceSq = dot(toCam, toCam);
+    s.Padding0 = 0.0f;
+    s.Padding1 = 0.0f;
+    g_AliveSortList.Append(s);
+#endif
+}
+
+[numthreads(256,1,1)]
+void BitonicSortCS(uint3 DTid : SV_DispatchThreadID)
+{
+    uint i = DTid.x;
+    uint elementCount = asuint(C0.x);
+    uint subArray = asuint(C0.y);
+    uint compareDistance = asuint(C0.z);
+    uint sortDescending = asuint(C0.w);
+
+    if (i >= elementCount)
+        return;
+
+#if defined(PARTICLE_SORT)
+    uint j = i ^ compareDistance;
+    if (j > i && j < elementCount)
+    {
+        SortEntry a = g_SortList[i];
+        SortEntry b = g_SortList[j];
+
+        bool ascending = ((i & subArray) == 0);
+        if (sortDescending != 0)
+            ascending = !ascending;
+
+        bool swapNeeded = ascending ? (a.DistanceSq > b.DistanceSq) : (a.DistanceSq < b.DistanceSq);
+        if (swapNeeded)
+        {
+            g_SortList[i] = b;
+            g_SortList[j] = a;
+        }
+    }
+#endif
+}
+
+// =========================
+// RENDER
+// =========================
+
+StructuredBuffer<Particle> g_ParticlesRO : register(t0);
+StructuredBuffer<SortEntry> g_SortListRO : register(t1);
+
+cbuffer ParticleRenderConstants : register(b0)
+{
+    float4x4 gParticleViewProj;
+    float3 gParticleCameraRight;
+    float gParticlePadding1;
+    float3 gParticleCameraUp;
+    float gParticlePadding2;
+    float3 gParticleLightDir;
+    float gParticleLightIntensity;
+    float4 gParticleLightColor;
+    float4 gParticleAmbient;
+};
+
+struct ParticleVSOutput
+{
+    float3 CenterW : TEXCOORD0;
+    float4 Color : COLOR0;
+    float Size : TEXCOORD1;
+    uint Alive : TEXCOORD2;
+};
+
+ParticleVSOutput ParticleVSMain(uint vertexId : SV_VertexID)
+{
+    ParticleVSOutput o;
+
+    SortEntry se = g_SortListRO[vertexId];
+    if (se.ParticleIndex == 0xFFFFFFFFu)
+    {
+        o.CenterW = float3(0.0f, 0.0f, 0.0f);
+        o.Color = float4(0, 0, 0, 0);
+        o.Size = 0.0f;
+        o.Alive = 0;
+        return o;
+    }
+
+    Particle p = g_ParticlesRO[se.ParticleIndex];
+    if (p.Life <= 0.0f)
+    {
+        o.CenterW = float3(0.0f, 0.0f, 0.0f);
+        o.Color = float4(0, 0, 0, 0);
+        o.Size = 0.0f;
+        o.Alive = 0;
+        return o;
+    }
+
+    float3 L = normalize(-gParticleLightDir);
+    float ndl = saturate(dot(float3(0.0f, 1.0f, 0.0f), L) * 0.5f + 0.5f);
+    float3 light = gParticleAmbient.rgb + gParticleLightColor.rgb * (gParticleLightIntensity * ndl);
+
+    float lifeRatio = saturate(p.Life / max(p.LifeSpan, 0.001f));
+
+    o.CenterW = p.Position;
+    o.Color = float4(saturate(p.Color.rgb * light), lifeRatio);
+    o.Size = p.Size;
+    o.Alive = 1;
+    return o;
+}
+
+struct ParticleGSOutput
+{
+    float4 PositionH : SV_POSITION;
+    float4 Color : COLOR0;
+};
+
+[maxvertexcount(4)]
+void ParticleGSMain(point ParticleVSOutput input[1], inout TriangleStream<ParticleGSOutput> triStream)
+{
+    if (input[0].Alive == 0 || input[0].Size <= 0.0f || input[0].Color.a <= 0.0f)
+        return;
+
+    float halfSize = input[0].Size;
+    float3 center = input[0].CenterW;
+
+    float3 corners[4];
+    corners[0] = center + (-gParticleCameraRight - gParticleCameraUp) * halfSize;
+    corners[1] = center + (-gParticleCameraRight + gParticleCameraUp) * halfSize;
+    corners[2] = center + ( gParticleCameraRight - gParticleCameraUp) * halfSize;
+    corners[3] = center + ( gParticleCameraRight + gParticleCameraUp) * halfSize;
+
+    ParticleGSOutput v;
+
+    v.Color = input[0].Color;
+    v.PositionH = mul(float4(corners[0], 1.0f), gParticleViewProj);
+    triStream.Append(v);
+
+    v.Color = input[0].Color;
+    v.PositionH = mul(float4(corners[1], 1.0f), gParticleViewProj);
+    triStream.Append(v);
+
+    v.Color = input[0].Color;
+    v.PositionH = mul(float4(corners[2], 1.0f), gParticleViewProj);
+    triStream.Append(v);
+
+    v.Color = input[0].Color;
+    v.PositionH = mul(float4(corners[3], 1.0f), gParticleViewProj);
+    triStream.Append(v);
+
+    triStream.RestartStrip();
+}
+
+float4 ParticlePSMain(ParticleGSOutput input) : SV_TARGET
+{
+    return input.Color;
+}

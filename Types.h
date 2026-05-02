@@ -55,3 +55,68 @@ struct InstanceData
     float Padding; // Для выравнивания до 16 байт
 };
 const int MAX_DYNAMIC_LIGHTS = 256;
+
+// Particle structures
+struct ParticleInstanceData
+{
+    DirectX::XMFLOAT3 Position;
+    DirectX::XMFLOAT4 Color;
+    float Size;
+    float Padding; // For 16-byte alignment
+};
+
+struct ParticleVertex
+{
+    DirectX::XMFLOAT3 Position;
+};
+
+struct ParticleSystemConstants
+{
+    DirectX::XMMATRIX ViewProj;
+    DirectX::XMFLOAT3 CameraPos;
+    float Padding;
+};
+
+// Particle system parameters
+struct Particle
+{
+    DirectX::XMFLOAT3 Position;
+    DirectX::XMFLOAT3 Velocity;
+    DirectX::XMFLOAT4 Color;
+    float Size;
+    float Life;
+    float MaxLife;
+    float Weight;
+};
+
+// Particle emitter settings
+struct ParticleEmitterSettings
+{
+    DirectX::XMFLOAT3 EmitterPosition;
+    DirectX::XMFLOAT3 EmitterDirection;
+    float EmitRate;           // Particles per second
+    float SpreadAngle;        // Emission spread in radians
+    float MinSpeed;
+    float MaxSpeed;
+    float MinSize;
+    float MaxSize;
+    float MinLife;
+    float MaxLife;
+    float Gravity;            // Downward force
+    DirectX::XMFLOAT4 StartColor;
+    DirectX::XMFLOAT4 EndColor;
+};
+
+// В Types.h добавь:
+struct GPUParticle
+{
+    DirectX::XMFLOAT3 Position;
+    float Life;           // Оставшееся время жизни
+    DirectX::XMFLOAT3 Velocity;
+    float LifeSpan;       // Полное время жизни
+    DirectX::XMFLOAT4 Color;
+    float Size;
+    float Weight;         // Для гравитации
+    float Age;            // Прожитое время
+    float Rotation;       // Не используется, но для alignment
+};

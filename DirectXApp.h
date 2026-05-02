@@ -106,9 +106,11 @@ private:
     void CreateUploadBuffer(const void* data, UINT64 dataSize,
         ComPtr<ID3D12Resource>& outputBuffer);
 
-    ComPtr<ID3DBlob> CompileShaderFile(const std::wstring& filePath,
+    ComPtr<ID3DBlob> CompileShaderFile(
+        const std::wstring& filePath,
         const std::string& entryPoint,
-        const std::string& shaderModel);
+        const std::string& shaderModel,
+        const D3D_SHADER_MACRO* defines = nullptr);
 
     struct DeferredLightCB
     {
@@ -415,7 +417,7 @@ private:
     std::vector<InstanceData> m_visibleInstanceData;
     void UpdateCubeColorsByDistance();
 
-// LOD уровни для кубов
+    // LOD уровни для кубов
     ComPtr<ID3D12Resource> m_lod0VertexBuffer;  // Полный куб (24 вершины, 12 треугольников)
     ComPtr<ID3D12Resource> m_lod0IndexBuffer;
     D3D12_VERTEX_BUFFER_VIEW m_lod0VertexBufferView;
@@ -453,5 +455,140 @@ private:
 
     // Функция обновления буфера для конкретного LOD
     void UpdateInstanceBufferForLOD(int lod, const std::vector<int>& indices);
+
+    // ========== PARTICLE SYSTEM ==========
+    static constexpr UINT MAX_PARTICLES = 4096;
+    static constexpr UINT PARTICLE_THREADS_PER_GROUP = 256;
+
+    struct GpuParticle
+    {
+        DirectX::XMFLOAT3 Position;
+        float Life;
+        DirectX::XMFLOAT3 Velocity;
+        float LifeSpan;
+        DirectX::XMFLOAT4 Color;
+        float Size;
+        float Weight;
+        float Age;
+        float Padding;
+    };
+
+    struct ParticleSortEntry
+    {
+        uint32_t ParticleIndex;
+        float DistanceSq;
+        float Padding0;
+        float Padding1;
+    };
+
+    struct alignas(16) ParticleEmitConstants
+    {
+        DirectX::XMFLOAT3 EmitterPosition;
+        uint32_t EmitCount;
+
+        DirectX::XMFLOAT3 BaseVelocity;
+        float Time;
+
+        DirectX::XMFLOAT3 VelocityRandomness;
+        float MinLifeSpan;
+
+        float MaxLifeSpan;
+        float MinSize;
+        float MaxSize;
+        uint32_t RandomSeed;
+
+        DirectX::XMFLOAT4 StartColorA;
+        DirectX::XMFLOAT4 StartColorB;
+
+        float EmitterRadius;
+        float Padding1;
+        float Padding2;
+        float Padding3;
+    };
+
+    struct ParticleUpdateConstants
+    {
+        float DeltaTime;
+        float TotalTime;
+        uint32_t MaxParticles;
+        uint32_t Padding0;
+        DirectX::XMFLOAT3 Gravity;
+        float GroundY;
+        DirectX::XMFLOAT3 CameraPosition;
+        uint32_t EnableGroundCollision;
+    };
+
+    struct ParticleRenderConstants
+    {
+        DirectX::XMFLOAT4X4 ViewProj;
+        DirectX::XMFLOAT3 CameraRight;
+        float Padding0;
+        DirectX::XMFLOAT3 CameraUp;
+        float Padding1;
+        DirectX::XMFLOAT3 DirectionalLightDir;
+        float DirectionalLightIntensity;
+        DirectX::XMFLOAT4 DirectionalLightColor;
+        DirectX::XMFLOAT4 AmbientColor;
+    };
+
+    // Particle resources
+    ComPtr<ID3D12Resource> m_particlePool;
+    ComPtr<ID3D12Resource> m_deadList;
+    ComPtr<ID3D12Resource> m_sortList;
+    ComPtr<ID3D12Resource> m_deadListCounter;
+    ComPtr<ID3D12Resource> m_sortListCounter;
+    ComPtr<ID3D12Resource> m_counterResetUpload;
+    ComPtr<ID3D12Resource> m_counterReadback[2];
+    uint32_t* m_counterReadbackMapped[2] = { nullptr, nullptr };
+
+    ComPtr<ID3D12Resource> m_particleEmitCB;
+    ComPtr<ID3D12Resource> m_particleUpdateCB;
+    ComPtr<ID3D12Resource> m_particleRenderCB;
+
+    ComPtr<ID3D12DescriptorHeap> m_particleHeap;
+    UINT m_particleDescSize = 0;
+
+    ComPtr<ID3D12RootSignature> m_particleComputeRS;
+    ComPtr<ID3D12RootSignature> m_particleRenderRS;
+    ComPtr<ID3D12PipelineState> m_particleInitDeadPSO;
+    ComPtr<ID3D12PipelineState> m_particleEmitPSO;
+    ComPtr<ID3D12PipelineState> m_particleUpdatePSO;
+    ComPtr<ID3D12PipelineState> m_particleRenderPSO;
+
+    ComPtr<ID3D12Resource> m_particleQuadVB;
+    ComPtr<ID3D12Resource> m_particleQuadIB;
+    D3D12_VERTEX_BUFFER_VIEW m_particleQuadVbView = {};
+    D3D12_INDEX_BUFFER_VIEW m_particleQuadIbView = {};
+
+    D3D12_RESOURCE_STATES m_particlePoolState = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_RESOURCE_STATES m_deadListState = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_RESOURCE_STATES m_sortListState = D3D12_RESOURCE_STATE_COMMON;
+
+    uint32_t m_aliveParticleCount = 0;
+    uint32_t m_particleFrameCounter = 0;
+    bool m_particlesInitialized = false;
+    bool m_particlesNeedReinit = true;
+    bool m_particlesEnabled = true;
+    float m_particleDeltaTime = 0.0f;
+
+    float m_particleTotalTime = 0.0f;
+
+    bool renderCubes = false;
+    UINT64 m_counterReadbackFenceValues[2] = {};
+    uint32_t m_lastKnownDeadCount = MAX_PARTICLES;
+    ComPtr<ID3D12PipelineState> m_particleSortPSO;
+
+    // Particle methods
+    void InitializeParticleSystem();
+    void ReinitializeParticles();
+    void UpdateParticles(float deltaTime);
+    void RenderParticles();
+    void CreateParticleQuadGeometry();
+    void CreateParticleRootSignatures();
+    void CreateParticlePipelines();
+    void CreateParticleResources();
+    void ResetParticleCounter(ID3D12Resource* counterResource, uint32_t value);
+    void CopyParticleCounterToReadback(ID3D12Resource* counterResource, ID3D12Resource* readbackResource);
+    void TransitionParticleComputeResources(D3D12_RESOURCE_STATES state);
 
 };
