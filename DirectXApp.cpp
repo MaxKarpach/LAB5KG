@@ -38,6 +38,9 @@ DirectXApp::~DirectXApp()
     if (m_deferredLightConstantBuffer && m_deferredLightCBMappedData)
         m_deferredLightConstantBuffer->Unmap(0, nullptr);
 
+    if (m_shadowConstantBuffer && m_mappedShadowConstantData)
+        m_shadowConstantBuffer->Unmap(0, nullptr);
+
     // Очистка 1000 буферов кубов
     for (int i = 0; i < (int)m_cubeConstantBuffers.size(); ++i)
     {
@@ -47,6 +50,8 @@ DirectXApp::~DirectXApp()
 
     if (m_fenceEvent)
         CloseHandle(m_fenceEvent);
+
+
 }
 // Descriptor Heaps
 void DirectXApp::CreateDescriptorHeaps()
@@ -71,7 +76,7 @@ void DirectXApp::CreateDescriptorHeaps()
     // SRV/CBV/UAV heap для текстур
     {
         D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-        heapDesc.NumDescriptors = 8;
+        heapDesc.NumDescriptors = 16;
         heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         ThrowIfFailed(m_d3dDevice->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_srvHeap)));
@@ -218,137 +223,212 @@ ComPtr<ID3DBlob> DirectXApp::CompileShaderFile(
 
 void DirectXApp::CreateRootSignature()
 {
-    D3D12_DESCRIPTOR_RANGE srvRanges[3] = {};
+    D3D12_DESCRIPTOR_RANGE srvRanges[4] = {};
 
-    // SRV для основной текстуры (t0)
+    // t0 - main texture
     srvRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     srvRanges[0].NumDescriptors = 1;
     srvRanges[0].BaseShaderRegister = 0;
     srvRanges[0].RegisterSpace = 0;
     srvRanges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    // SRV для карты нормалей (t1)
+    // t1 - normal map
     srvRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     srvRanges[1].NumDescriptors = 1;
     srvRanges[1].BaseShaderRegister = 1;
     srvRanges[1].RegisterSpace = 0;
     srvRanges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    // SRV для карты смещения (t2)
+    // t2 - displacement map
     srvRanges[2].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     srvRanges[2].NumDescriptors = 1;
     srvRanges[2].BaseShaderRegister = 2;
     srvRanges[2].RegisterSpace = 0;
     srvRanges[2].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
+    // t4 - shadow map
+    // ВАЖНО: t3 у тебя занят GBuffer depth в deferred lighting pass,
+    // поэтому shadow map кладем в t4.
+    srvRanges[3].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    srvRanges[3].NumDescriptors = 1;
+    srvRanges[3].BaseShaderRegister = 4;
+    srvRanges[3].RegisterSpace = 0;
+    srvRanges[3].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
     D3D12_ROOT_PARAMETER rootParams[4] = {};
 
-    // Слот 0: Константный буфер объекта (b0)
+    // b0 - object/global constant buffer
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[0].Descriptor.ShaderRegister = 0;
     rootParams[0].Descriptor.RegisterSpace = 0;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    // Слот 1: Дескрипторная таблица для текстур
+    // textures table: t0, t1, t2, t4
     rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    rootParams[1].DescriptorTable.NumDescriptorRanges = 3;
+    rootParams[1].DescriptorTable.NumDescriptorRanges = _countof(srvRanges);
     rootParams[1].DescriptorTable.pDescriptorRanges = srvRanges;
     rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
-    // Слот 2: Константный буфер тесселяции (b2)
+    // b2 - tessellation constants
     rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[2].Descriptor.ShaderRegister = 2;
     rootParams[2].Descriptor.RegisterSpace = 0;
     rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    // Слот 3: Константный буфер воды (b3)
+    // b3 - water constants
     rootParams[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[3].Descriptor.ShaderRegister = 3;
     rootParams[3].Descriptor.RegisterSpace = 0;
-    rootParams[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;  // <
+    rootParams[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    D3D12_STATIC_SAMPLER_DESC sampler = {};
-    sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.MipLODBias = 0;
-    sampler.MaxAnisotropy = 1;
-    sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
-    sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
-    sampler.MinLOD = 0;
-    sampler.MaxLOD = D3D12_FLOAT32_MAX;
-    sampler.ShaderRegister = 0;
-    sampler.RegisterSpace = 0;
-    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    D3D12_STATIC_SAMPLER_DESC samplers[2] = {};
+
+    // s0 - обычный sampler для текстур
+    samplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    samplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    samplers[0].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    samplers[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    samplers[0].MipLODBias = 0.0f;
+    samplers[0].MaxAnisotropy = 1;
+    samplers[0].ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+    samplers[0].BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
+    samplers[0].MinLOD = 0.0f;
+    samplers[0].MaxLOD = D3D12_FLOAT32_MAX;
+    samplers[0].ShaderRegister = 0;
+    samplers[0].RegisterSpace = 0;
+    samplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    // s1 - comparison sampler для shadow map + PCF
+    samplers[1].Filter = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+    samplers[1].AddressU = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    samplers[1].AddressV = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    samplers[1].AddressW = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    samplers[1].MipLODBias = 0.0f;
+    samplers[1].MaxAnisotropy = 1;
+    samplers[1].ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    samplers[1].BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+    samplers[1].MinLOD = 0.0f;
+    samplers[1].MaxLOD = D3D12_FLOAT32_MAX;
+    samplers[1].ShaderRegister = 1;
+    samplers[1].RegisterSpace = 0;
+    samplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_ROOT_SIGNATURE_DESC desc = {};
-    desc.NumParameters = 4;
+    desc.NumParameters = _countof(rootParams);
     desc.pParameters = rootParams;
-    desc.NumStaticSamplers = 1;
-    desc.pStaticSamplers = &sampler;
+    desc.NumStaticSamplers = _countof(samplers);
+    desc.pStaticSamplers = samplers;
     desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
-    ComPtr<ID3DBlob> signature, error;
-    HRESULT hr = D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error);
+    ComPtr<ID3DBlob> signature;
+    ComPtr<ID3DBlob> error;
+
+    HRESULT hr = D3D12SerializeRootSignature(
+        &desc,
+        D3D_ROOT_SIGNATURE_VERSION_1,
+        &signature,
+        &error);
+
     if (FAILED(hr))
     {
         if (error)
         {
-            std::string errorMsg = (char*)error->GetBufferPointer();
-            MessageBoxA(m_windowHandle, errorMsg.c_str(), "Root Signature Error", MB_OK);
+            std::string errorMsg =
+                static_cast<const char*>(error->GetBufferPointer());
+
+            MessageBoxA(
+                m_windowHandle,
+                errorMsg.c_str(),
+                "Root Signature Error",
+                MB_OK | MB_ICONERROR);
         }
+
         ThrowIfFailed(hr);
     }
 
-    hr = m_d3dDevice->CreateRootSignature(0, signature->GetBufferPointer(),
+    ThrowIfFailed(m_d3dDevice->CreateRootSignature(
+        0,
+        signature->GetBufferPointer(),
         signature->GetBufferSize(),
-        IID_PPV_ARGS(&m_rootSignature));
-    ThrowIfFailed(hr);
+        IID_PPV_ARGS(&m_rootSignature)));
 }
 
 void DirectXApp::CreateDeferredRootSignatures()
 {
     D3D12_DESCRIPTOR_RANGE srvRange = {};
     srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srvRange.NumDescriptors = 4;
+    srvRange.NumDescriptors = 5; // t0-t3 = GBuffer, t4 = ShadowMap
     srvRange.BaseShaderRegister = 0;
     srvRange.RegisterSpace = 0;
     srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
     D3D12_ROOT_PARAMETER rootParams[2] = {};
 
+    // Root parameter 0: SRV table for deferred lighting
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParams[0].DescriptorTable.NumDescriptorRanges = 1;
     rootParams[0].DescriptorTable.pDescriptorRanges = &srvRange;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
+    // Root parameter 1: DeferredLightCB at b1
     rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[1].Descriptor.ShaderRegister = 1;
     rootParams[1].Descriptor.RegisterSpace = 0;
     rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
+    D3D12_STATIC_SAMPLER_DESC shadowSampler = {};
+    shadowSampler.Filter = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+    shadowSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    shadowSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    shadowSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    shadowSampler.MipLODBias = 0.0f;
+    shadowSampler.MaxAnisotropy = 1;
+    shadowSampler.ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    shadowSampler.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+    shadowSampler.MinLOD = 0.0f;
+    shadowSampler.MaxLOD = D3D12_FLOAT32_MAX;
+    shadowSampler.ShaderRegister = 1; // s1 = ShadowSampler
+    shadowSampler.RegisterSpace = 0;
+    shadowSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
     D3D12_ROOT_SIGNATURE_DESC desc = {};
-    desc.NumParameters = 2;
+    desc.NumParameters = _countof(rootParams);
     desc.pParameters = rootParams;
+    desc.NumStaticSamplers = 1;
+    desc.pStaticSamplers = &shadowSampler;
     desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
-    ComPtr<ID3DBlob> serialized, error;
-    HRESULT hr = D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized, &error);
+    ComPtr<ID3DBlob> serialized;
+    ComPtr<ID3DBlob> error;
+
+    HRESULT hr = D3D12SerializeRootSignature(
+        &desc,
+        D3D_ROOT_SIGNATURE_VERSION_1,
+        &serialized,
+        &error);
+
     if (FAILED(hr))
     {
         if (error)
         {
-            std::string errorMsg = (char*)error->GetBufferPointer();
-            MessageBoxA(m_windowHandle, errorMsg.c_str(), "Deferred Root Signature Error", MB_OK);
+            std::string errorMsg =
+                static_cast<const char*>(error->GetBufferPointer());
+
+            MessageBoxA(
+                m_windowHandle,
+                errorMsg.c_str(),
+                "Deferred Root Signature Error",
+                MB_OK | MB_ICONERROR);
         }
+
         ThrowIfFailed(hr);
     }
 
-    hr = m_d3dDevice->CreateRootSignature(0, serialized->GetBufferPointer(),
+    ThrowIfFailed(m_d3dDevice->CreateRootSignature(
+        0,
+        serialized->GetBufferPointer(),
         serialized->GetBufferSize(),
-        IID_PPV_ARGS(&m_deferredLightingRootSignature));
-    ThrowIfFailed(hr);
+        IID_PPV_ARGS(&m_deferredLightingRootSignature)));
 }
 
 void DirectXApp::CreatePipelineState()
@@ -981,6 +1061,30 @@ void DirectXApp::UpdateLightingConstants()
         1.0f / static_cast<float>(m_screenHeight)
     );
 
+    DirectX::XMFLOAT3 cameraPos = m_camera.GetPosition();
+    cb.CameraPosition = DirectX::XMFLOAT4(cameraPos.x, cameraPos.y, cameraPos.z, 1.0f);
+
+    for (UINT cascade = 0; cascade < SHADOW_CASCADE_COUNT; ++cascade)
+    {
+        cb.LightViewProj[cascade] = m_lightViewProj[cascade];
+    }
+
+    cb.CascadeSplits = m_cascadeSplits;
+
+    cb.ShadowParams = DirectX::XMFLOAT4(
+        0.0025f,
+        static_cast<float>(SHADOW_MAP_SIZE),
+        static_cast<float>(SHADOW_CASCADE_COUNT),
+        0.0f
+    );
+
+    cb.DebugParams = DirectX::XMFLOAT4(
+        static_cast<float>(static_cast<int>(m_shadowDebugMode)),
+        0.0f,
+        0.0f,
+        0.0f
+    );
+
     // Camera matrices
     float aspectRatio = (m_screenHeight > 0) ?
         static_cast<float>(m_screenWidth) / m_screenHeight : 1.0f;
@@ -994,6 +1098,7 @@ void DirectXApp::UpdateLightingConstants()
     DirectX::XMStoreFloat4x4(&cb.InvProj, DirectX::XMMatrixTranspose(invProj));
 
     memcpy(m_deferredLightCBMappedData, &cb, sizeof(cb));
+
 }
 
 void DirectXApp::Update(float deltaTime)
@@ -1041,7 +1146,30 @@ void DirectXApp::Update(float deltaTime)
                 SetCullingMode(CullingMode::None);
         }
         m_prevVKey = m_inputDevice->IsKeyDown('V');
+
+        if (m_inputDevice->IsKeyDown('B') && !m_prevBKey)
+        {
+            int mode = static_cast<int>(m_shadowDebugMode);
+            mode = (mode + 1) % 5;
+            m_shadowDebugMode = static_cast<ShadowDebugMode>(mode);
+
+            const wchar_t* modeName = L"Normal";
+            if (m_shadowDebugMode == ShadowDebugMode::ShadowMask)
+                modeName = L"Shadow Mask";
+            else if (m_shadowDebugMode == ShadowDebugMode::NoShadows)
+                modeName = L"No Shadows";
+            else if (m_shadowDebugMode == ShadowDebugMode::CascadeColors)
+                modeName = L"Cascade Colors";
+            else if (m_shadowDebugMode == ShadowDebugMode::CheckerShadows)
+                modeName = L"Checker Shadows";
+
+            wchar_t title[256];
+            swprintf_s(title, L"Shadow Debug Mode: %s", modeName);
+            SetWindowTextW(m_windowHandle, title);
+        }
+        m_prevBKey = m_inputDevice->IsKeyDown('B');
     }
+
 
     // Обновляем время воды
     m_waterTime += deltaTime;
@@ -1366,8 +1494,13 @@ void DirectXApp::RenderDeferredFrame()
     barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     m_cmdList->ResourceBarrier(1, &barrier);
 
-    // GPU-обновление частиц должно быть здесь, а не в Update()
     UpdateParticles(m_particleDeltaTime);
+
+    RenderShadowPass();
+
+    // Важно: lighting constants обновляем после shadow pass,
+    // потому что RenderShadowPass обновляет матрицы каскадов.
+    UpdateLightingConstants();
 
     RenderGeometryPass();
     RenderLightingPass();
@@ -1483,6 +1616,22 @@ void DirectXApp::Resize(int newWidth, int newHeight)
     {
         m_gbuffer->Shutdown();
         m_gbuffer->Initialize(m_d3dDevice.Get(), m_screenWidth, m_screenHeight);
+
+        if (m_shadowMap)
+        {
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+            srvDesc.Texture2DArray.MipLevels = 1;
+            srvDesc.Texture2DArray.FirstArraySlice = 0;
+            srvDesc.Texture2DArray.ArraySize = SHADOW_CASCADE_COUNT;
+
+            m_gbuffer->CreateExternalSRV(
+                SHADOW_SRV_SLOT,
+                m_shadowMap.Get(),
+                srvDesc);
+        }
     }
 }
 
@@ -1544,6 +1693,9 @@ bool DirectXApp::Initialize()
         CreatePipelineState();
         CreateDeferredPipelines();
         CreateWaterTessellationPipeline();
+
+        CreateShadowMap();
+        CreateShadowPipeline();
 
         CreateTessellationPipeline();
         CreateTessellationGeometryPipeline();
@@ -1705,6 +1857,7 @@ bool DirectXApp::Initialize()
         FlushCommandQueue();
 
         CreateConstantBuffer();
+        CreateShadowConstantBuffer();
         UpdateLightingConstants();
 
     }
@@ -3425,10 +3578,17 @@ void DirectXApp::CreateParticlePipelines()
         { nullptr, nullptr }
     };
 
+    const D3D_SHADER_MACRO clearSortDefines[] =
+    {
+        { "PARTICLE_CLEAR_SORT", "1" },
+        { nullptr, nullptr }
+    };
+
     auto initCS = CompileShaderFile(filePath, "ParticleInitDeadListCS", "cs_5_0", initDefines);
     auto emitCS = CompileShaderFile(filePath, "ParticleEmitCS", "cs_5_0", emitDefines);
     auto updateCS = CompileShaderFile(filePath, "ParticleUpdateCS", "cs_5_0", updateDefines);
     auto sortCS = CompileShaderFile(filePath, "BitonicSortCS", "cs_5_0", sortDefines);
+    auto clearSortCS = CompileShaderFile(filePath, "ClearSortListCS", "cs_5_0", clearSortDefines);
 
     auto vs = CompileShaderFile(filePath, "ParticleVSMain", "vs_5_0");
     auto gs = CompileShaderFile(filePath, "ParticleGSMain", "gs_5_0");
@@ -3448,6 +3608,11 @@ void DirectXApp::CreateParticlePipelines()
 
     cpsd.CS = { sortCS->GetBufferPointer(), sortCS->GetBufferSize() };
     ThrowIfFailed(m_d3dDevice->CreateComputePipelineState(&cpsd, IID_PPV_ARGS(&m_particleSortPSO)));
+
+    cpsd.CS = { clearSortCS->GetBufferPointer(), clearSortCS->GetBufferSize() };
+    ThrowIfFailed(m_d3dDevice->CreateComputePipelineState(
+        &cpsd,
+        IID_PPV_ARGS(&m_particleClearSortPSO)));
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC gpsd = {};
     gpsd.InputLayout = { nullptr, 0 };
@@ -3576,6 +3741,7 @@ void DirectXApp::CreateParticleResources()
     createUploadCB(sizeof(ParticleEmitConstants), m_particleEmitCB);
     createUploadCB(sizeof(ParticleUpdateConstants), m_particleUpdateCB);
     createUploadCB(sizeof(ParticleRenderConstants), m_particleRenderCB);
+    createUploadCB(sizeof(ParticleSortConstants), m_particleSortCB);
 
     // Create views
     auto cpuHandle = m_particleHeap->GetCPUDescriptorHandleForHeapStart();
@@ -3739,6 +3905,7 @@ void DirectXApp::InitializeParticleSystem()
     m_aliveParticleCount = 0;
 }
 
+
 void DirectXApp::ReinitializeParticles()
 {
     if (!m_particlesInitialized)
@@ -3751,6 +3918,37 @@ void DirectXApp::ReinitializeParticles()
     ID3D12DescriptorHeap* heaps[] = { m_particleHeap.Get() };
     m_cmdList->SetDescriptorHeaps(1, heaps);
     m_cmdList->SetComputeRootSignature(m_particleComputeRS.Get());
+    m_cmdList->SetComputeRootDescriptorTable(
+        1,
+        m_particleHeap->GetGPUDescriptorHandleForHeapStart());
+
+    D3D12_RESOURCE_BARRIER uavBarrier = {};
+    uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    uavBarrier.UAV.pResource = nullptr;
+
+    // Clear sort list before the first render. Resetting the append counter does not
+    // clear old entries inside m_sortList.
+    {
+        ParticleSortConstants clear = {};
+        clear.ElementCount = MAX_PARTICLES;
+
+        void* mapped = nullptr;
+        m_particleSortCB->Map(0, nullptr, &mapped);
+        memcpy(mapped, &clear, sizeof(clear));
+        m_particleSortCB->Unmap(0, nullptr);
+
+        m_cmdList->SetPipelineState(m_particleClearSortPSO.Get());
+        m_cmdList->SetComputeRootConstantBufferView(
+            0,
+            m_particleSortCB->GetGPUVirtualAddress());
+
+        m_cmdList->Dispatch(
+            (MAX_PARTICLES + PARTICLE_THREADS_PER_GROUP - 1) / PARTICLE_THREADS_PER_GROUP,
+            1,
+            1);
+    }
+
+    m_cmdList->ResourceBarrier(1, &uavBarrier);
 
     ParticleUpdateConstants initCb = {};
     initCb.MaxParticles = MAX_PARTICLES;
@@ -3760,18 +3958,22 @@ void DirectXApp::ReinitializeParticles()
     memcpy(mapped, &initCb, sizeof(initCb));
     m_particleUpdateCB->Unmap(0, nullptr);
 
-    m_cmdList->SetComputeRootConstantBufferView(0, m_particleUpdateCB->GetGPUVirtualAddress());
-    m_cmdList->SetComputeRootDescriptorTable(1, m_particleHeap->GetGPUDescriptorHandleForHeapStart());
-    m_cmdList->SetPipelineState(m_particleInitDeadPSO.Get());
-    m_cmdList->Dispatch((MAX_PARTICLES + PARTICLE_THREADS_PER_GROUP - 1) / PARTICLE_THREADS_PER_GROUP, 1, 1);
+    m_cmdList->SetComputeRootConstantBufferView(
+        0,
+        m_particleUpdateCB->GetGPUVirtualAddress());
 
-    D3D12_RESOURCE_BARRIER uavBarrier = {};
-    uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-    uavBarrier.UAV.pResource = nullptr;
+    m_cmdList->SetPipelineState(m_particleInitDeadPSO.Get());
+    m_cmdList->Dispatch(
+        (MAX_PARTICLES + PARTICLE_THREADS_PER_GROUP - 1) / PARTICLE_THREADS_PER_GROUP,
+        1,
+        1);
+
     m_cmdList->ResourceBarrier(1, &uavBarrier);
 
     // Сразу копируем стартовый dead counter в readback slot 0.
-    CopyParticleCounterToReadback(m_deadListCounter.Get(), m_counterReadback[0].Get());
+    CopyParticleCounterToReadback(
+        m_deadListCounter.Get(),
+        m_counterReadback[0].Get());
 
     // Этот readback станет валиден, когда завершится текущий кадр.
     m_counterReadbackFenceValues[0] = m_fenceValues[m_currentBackBuffer];
@@ -3814,7 +4016,8 @@ void DirectXApp::UpdateParticles(float deltaTime)
     }
 
     const uint32_t requestedEmitCount = 4;
-    const uint32_t actualEmitCount = (requestedEmitCount < deadCount) ? requestedEmitCount : deadCount;
+    const uint32_t actualEmitCount =
+        (requestedEmitCount < deadCount) ? requestedEmitCount : deadCount;
 
     TransitionParticleComputeResources(D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ResetParticleCounter(m_sortListCounter.Get(), 0);
@@ -3822,7 +4025,36 @@ void DirectXApp::UpdateParticles(float deltaTime)
     ID3D12DescriptorHeap* heaps[] = { m_particleHeap.Get() };
     m_cmdList->SetDescriptorHeaps(1, heaps);
     m_cmdList->SetComputeRootSignature(m_particleComputeRS.Get());
-    m_cmdList->SetComputeRootDescriptorTable(1, m_particleHeap->GetGPUDescriptorHandleForHeapStart());
+    m_cmdList->SetComputeRootDescriptorTable(
+        1,
+        m_particleHeap->GetGPUDescriptorHandleForHeapStart());
+
+    D3D12_RESOURCE_BARRIER uavBarrier = {};
+    uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    uavBarrier.UAV.pResource = nullptr;
+
+    // Clear sort list, because resetting the append counter does not clear old entries.
+    {
+        ParticleSortConstants clear = {};
+        clear.ElementCount = MAX_PARTICLES;
+
+        void* mapped = nullptr;
+        m_particleSortCB->Map(0, nullptr, &mapped);
+        memcpy(mapped, &clear, sizeof(clear));
+        m_particleSortCB->Unmap(0, nullptr);
+
+        m_cmdList->SetPipelineState(m_particleClearSortPSO.Get());
+        m_cmdList->SetComputeRootConstantBufferView(
+            0,
+            m_particleSortCB->GetGPUVirtualAddress());
+
+        m_cmdList->Dispatch(
+            (MAX_PARTICLES + PARTICLE_THREADS_PER_GROUP - 1) / PARTICLE_THREADS_PER_GROUP,
+            1,
+            1);
+    }
+
+    m_cmdList->ResourceBarrier(1, &uavBarrier);
 
     // Emit
     {
@@ -3838,9 +4070,8 @@ void DirectXApp::UpdateParticles(float deltaTime)
         emit.MaxSize = 3.0f;
         emit.RandomSeed = 1337u + m_particleFrameCounter;
 
-        // Красно-сине-белая гамма
-        emit.StartColorA = DirectX::XMFLOAT4(1.0f, 0.1f, 0.1f, 1.0f); // красный
-        emit.StartColorB = DirectX::XMFLOAT4(0.1f, 0.3f, 1.0f, 1.0f); // синий
+        emit.StartColorA = DirectX::XMFLOAT4(1.0f, 0.1f, 0.1f, 1.0f);
+        emit.StartColorB = DirectX::XMFLOAT4(0.1f, 0.3f, 1.0f, 1.0f);
 
         emit.EmitterRadius = 2.0f;
 
@@ -3852,14 +4083,17 @@ void DirectXApp::UpdateParticles(float deltaTime)
         if (emit.EmitCount > 0)
         {
             m_cmdList->SetPipelineState(m_particleEmitPSO.Get());
-            m_cmdList->SetComputeRootConstantBufferView(0, m_particleEmitCB->GetGPUVirtualAddress());
-            m_cmdList->Dispatch((emit.EmitCount + PARTICLE_THREADS_PER_GROUP - 1) / PARTICLE_THREADS_PER_GROUP, 1, 1);
+            m_cmdList->SetComputeRootConstantBufferView(
+                0,
+                m_particleEmitCB->GetGPUVirtualAddress());
+
+            m_cmdList->Dispatch(
+                (emit.EmitCount + PARTICLE_THREADS_PER_GROUP - 1) / PARTICLE_THREADS_PER_GROUP,
+                1,
+                1);
         }
     }
 
-    D3D12_RESOURCE_BARRIER uavBarrier = {};
-    uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-    uavBarrier.UAV.pResource = nullptr;
     m_cmdList->ResourceBarrier(1, &uavBarrier);
 
     // Update
@@ -3881,14 +4115,61 @@ void DirectXApp::UpdateParticles(float deltaTime)
         m_particleUpdateCB->Unmap(0, nullptr);
 
         m_cmdList->SetPipelineState(m_particleUpdatePSO.Get());
-        m_cmdList->SetComputeRootConstantBufferView(0, m_particleUpdateCB->GetGPUVirtualAddress());
-        m_cmdList->Dispatch((MAX_PARTICLES + PARTICLE_THREADS_PER_GROUP - 1) / PARTICLE_THREADS_PER_GROUP, 1, 1);
+        m_cmdList->SetComputeRootConstantBufferView(
+            0,
+            m_particleUpdateCB->GetGPUVirtualAddress());
+
+        m_cmdList->Dispatch(
+            (MAX_PARTICLES + PARTICLE_THREADS_PER_GROUP - 1) / PARTICLE_THREADS_PER_GROUP,
+            1,
+            1);
     }
 
     m_cmdList->ResourceBarrier(1, &uavBarrier);
 
+    // Sort alive entries by distance. We sort the full MAX_PARTICLES array because the
+    // current render path draws MAX_PARTICLES and inactive entries were cleared above.
+    {
+        const uint32_t elementCount = MAX_PARTICLES;
+        const uint32_t sortDescending = 1; // farther particles first for alpha blending
+
+        m_cmdList->SetPipelineState(m_particleSortPSO.Get());
+
+        for (uint32_t subArray = 2; subArray <= elementCount; subArray <<= 1)
+        {
+            for (uint32_t compareDistance = subArray >> 1;
+                compareDistance > 0;
+                compareDistance >>= 1)
+            {
+                ParticleSortConstants sort = {};
+                sort.ElementCount = elementCount;
+                sort.SubArray = subArray;
+                sort.CompareDistance = compareDistance;
+                sort.SortDescending = sortDescending;
+
+                void* mapped = nullptr;
+                m_particleSortCB->Map(0, nullptr, &mapped);
+                memcpy(mapped, &sort, sizeof(sort));
+                m_particleSortCB->Unmap(0, nullptr);
+
+                m_cmdList->SetComputeRootConstantBufferView(
+                    0,
+                    m_particleSortCB->GetGPUVirtualAddress());
+
+                m_cmdList->Dispatch(
+                    (elementCount + PARTICLE_THREADS_PER_GROUP - 1) / PARTICLE_THREADS_PER_GROUP,
+                    1,
+                    1);
+
+                m_cmdList->ResourceBarrier(1, &uavBarrier);
+            }
+        }
+    }
+
     // Копируем новый dead counter в другой readback slot.
-    CopyParticleCounterToReadback(m_deadListCounter.Get(), m_counterReadback[writeIndex].Get());
+    CopyParticleCounterToReadback(
+        m_deadListCounter.Get(),
+        m_counterReadback[writeIndex].Get());
 
     // Этот slot станет валиден, когда текущий кадр завершится и будет засигнален fence.
     m_counterReadbackFenceValues[writeIndex] = m_fenceValues[m_currentBackBuffer];
@@ -3981,4 +4262,396 @@ void DirectXApp::RenderParticles()
 
     m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_POINTLIST);
     m_cmdList->DrawInstanced(MAX_PARTICLES, 1, 0, 0);
+}
+
+void DirectXApp::CreateShadowMap()
+{
+    m_shadowViewport.TopLeftX = 0.0f;
+    m_shadowViewport.TopLeftY = 0.0f;
+    m_shadowViewport.Width = static_cast<float>(SHADOW_MAP_SIZE);
+    m_shadowViewport.Height = static_cast<float>(SHADOW_MAP_SIZE);
+    m_shadowViewport.MinDepth = 0.0f;
+    m_shadowViewport.MaxDepth = 1.0f;
+
+    m_shadowScissor = { 0, 0, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE };
+
+    D3D12_HEAP_PROPERTIES heapProps = {};
+    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    D3D12_RESOURCE_DESC texDesc = {};
+    texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    texDesc.Width = SHADOW_MAP_SIZE;
+    texDesc.Height = SHADOW_MAP_SIZE;
+    texDesc.DepthOrArraySize = SHADOW_CASCADE_COUNT;
+    texDesc.MipLevels = 1;
+    texDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+    texDesc.SampleDesc = { 1, 0 };
+    texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    texDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+    D3D12_CLEAR_VALUE clearValue = {};
+    clearValue.Format = DXGI_FORMAT_D32_FLOAT;
+    clearValue.DepthStencil.Depth = 1.0f;
+    clearValue.DepthStencil.Stencil = 0;
+
+    ThrowIfFailed(m_d3dDevice->CreateCommittedResource(
+        &heapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &texDesc,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE,
+        &clearValue,
+        IID_PPV_ARGS(&m_shadowMap)));
+
+    m_shadowMapState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+
+    D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};
+    dsvHeapDesc.NumDescriptors = SHADOW_CASCADE_COUNT;
+    dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+
+    ThrowIfFailed(m_d3dDevice->CreateDescriptorHeap(
+        &dsvHeapDesc,
+        IID_PPV_ARGS(&m_shadowDsvHeap)));
+
+    UINT dsvSize = m_d3dDevice->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+
+    for (UINT cascade = 0; cascade < SHADOW_CASCADE_COUNT; ++cascade)
+    {
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
+        dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
+        dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
+        dsvDesc.Texture2DArray.MipSlice = 0;
+        dsvDesc.Texture2DArray.FirstArraySlice = cascade;
+        dsvDesc.Texture2DArray.ArraySize = 1;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle =
+            m_shadowDsvHeap->GetCPUDescriptorHandleForHeapStart();
+        dsvHandle.ptr += cascade * dsvSize;
+
+        m_d3dDevice->CreateDepthStencilView(
+            m_shadowMap.Get(),
+            &dsvDesc,
+            dsvHandle);
+    }
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+    srvDesc.Texture2DArray.MipLevels = 1;
+    srvDesc.Texture2DArray.FirstArraySlice = 0;
+    srvDesc.Texture2DArray.ArraySize = SHADOW_CASCADE_COUNT;
+
+    m_gbuffer->CreateExternalSRV(
+        SHADOW_SRV_SLOT,
+        m_shadowMap.Get(),
+        srvDesc);
+}
+
+void DirectXApp::CreateShadowPipeline()
+{
+    wchar_t exePath[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+
+    std::wstring filePath(exePath);
+    filePath = filePath.substr(0, filePath.find_last_of(L"\\/") + 1) + L"shaders.hlsl";
+
+    auto vs = CompileShaderFile(filePath, "ShadowVSMain", "vs_5_0");
+
+    D3D12_INPUT_ELEMENT_DESC inputLayout[] =
+    {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
+          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+
+        { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12,
+          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+
+        { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24,
+          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40,
+          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+
+        { "TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 48,
+          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+
+        { "BINORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 60,
+          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+    };
+
+    D3D12_RASTERIZER_DESC rasterizerDesc = {};
+    rasterizerDesc.FillMode = D3D12_FILL_MODE_SOLID;
+    rasterizerDesc.CullMode = D3D12_CULL_MODE_BACK;
+    rasterizerDesc.DepthClipEnable = TRUE;
+
+    rasterizerDesc.DepthBias = 10000;
+    rasterizerDesc.SlopeScaledDepthBias = 2.0f;
+    rasterizerDesc.DepthBiasClamp = 0.01f;
+
+    D3D12_DEPTH_STENCIL_DESC depthStencilDesc = {};
+    depthStencilDesc.DepthEnable = TRUE;
+    depthStencilDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    depthStencilDesc.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+    depthStencilDesc.StencilEnable = FALSE;
+
+    D3D12_BLEND_DESC blendDesc = {};
+    blendDesc.RenderTarget[0].RenderTargetWriteMask = 0;
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+    psoDesc.InputLayout = { inputLayout, _countof(inputLayout) };
+    psoDesc.pRootSignature = m_rootSignature.Get();
+    psoDesc.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
+    psoDesc.PS = { nullptr, 0 };
+    psoDesc.RasterizerState = rasterizerDesc;
+    psoDesc.BlendState = blendDesc;
+    psoDesc.DepthStencilState = depthStencilDesc;
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets = 0;
+    psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+    psoDesc.SampleDesc = { 1, 0 };
+
+    ThrowIfFailed(m_d3dDevice->CreateGraphicsPipelineState(
+        &psoDesc,
+        IID_PPV_ARGS(&m_shadowPSO)));
+}
+
+void DirectXApp::UpdateShadowConstants()
+{
+    float aspectRatio = (m_screenHeight > 0)
+        ? static_cast<float>(m_screenWidth) / m_screenHeight
+        : 1.0f;
+
+    const float cascadeNear[SHADOW_CASCADE_COUNT] = { 0.1f, 10.0f, 30.0f, 80.0f };
+    const float cascadeFar[SHADOW_CASCADE_COUNT] = { 10.0f, 30.0f, 80.0f, 300.0f };
+
+    m_cascadeSplits = DirectX::XMFLOAT4(
+        cascadeFar[0],
+        cascadeFar[1],
+        cascadeFar[2],
+        cascadeFar[3]);
+
+    DirectX::XMVECTOR lightDir = DirectX::XMVector3Normalize(
+        DirectX::XMVectorSet(-0.5f, -1.0f, -0.3f, 0.0f));
+
+    DirectX::XMMATRIX cameraView = m_camera.GetViewMatrix();
+
+    for (UINT cascade = 0; cascade < SHADOW_CASCADE_COUNT; ++cascade)
+    {
+        DirectX::XMMATRIX cascadeProj = DirectX::XMMatrixPerspectiveFovLH(
+            DirectX::XMConvertToRadians(60.0f),
+            aspectRatio,
+            cascadeNear[cascade],
+            cascadeFar[cascade]);
+
+        DirectX::XMMATRIX invViewProj =
+            DirectX::XMMatrixInverse(nullptr, cameraView * cascadeProj);
+
+        DirectX::XMVECTOR frustumCorners[8] =
+        {
+            DirectX::XMVectorSet(-1.0f,  1.0f, 0.0f, 1.0f),
+            DirectX::XMVectorSet(1.0f,  1.0f, 0.0f, 1.0f),
+            DirectX::XMVectorSet(1.0f, -1.0f, 0.0f, 1.0f),
+            DirectX::XMVectorSet(-1.0f, -1.0f, 0.0f, 1.0f),
+            DirectX::XMVectorSet(-1.0f,  1.0f, 1.0f, 1.0f),
+            DirectX::XMVectorSet(1.0f,  1.0f, 1.0f, 1.0f),
+            DirectX::XMVectorSet(1.0f, -1.0f, 1.0f, 1.0f),
+            DirectX::XMVectorSet(-1.0f, -1.0f, 1.0f, 1.0f),
+        };
+
+        DirectX::XMVECTOR center = DirectX::XMVectorZero();
+
+        for (int i = 0; i < 8; ++i)
+        {
+            frustumCorners[i] = DirectX::XMVector3TransformCoord(
+                frustumCorners[i],
+                invViewProj);
+
+            center += frustumCorners[i];
+        }
+
+        center /= 8.0f;
+
+        DirectX::XMVECTOR lightPos = center - lightDir * 250.0f;
+
+        DirectX::XMMATRIX lightView = DirectX::XMMatrixLookAtLH(
+            lightPos,
+            center,
+            DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f));
+
+        DirectX::XMVECTOR minBounds =
+            DirectX::XMVectorSet(FLT_MAX, FLT_MAX, FLT_MAX, 1.0f);
+        DirectX::XMVECTOR maxBounds =
+            DirectX::XMVectorSet(-FLT_MAX, -FLT_MAX, -FLT_MAX, 1.0f);
+
+        for (int i = 0; i < 8; ++i)
+        {
+            DirectX::XMVECTOR cornerLS =
+                DirectX::XMVector3TransformCoord(frustumCorners[i], lightView);
+
+            minBounds = DirectX::XMVectorMin(minBounds, cornerLS);
+            maxBounds = DirectX::XMVectorMax(maxBounds, cornerLS);
+        }
+
+        DirectX::XMFLOAT3 minLS;
+        DirectX::XMFLOAT3 maxLS;
+        DirectX::XMStoreFloat3(&minLS, minBounds);
+        DirectX::XMStoreFloat3(&maxLS, maxBounds);
+
+        float zMult = 10.0f;
+        if (minLS.z < 0.0f)
+            minLS.z *= zMult;
+        else
+            minLS.z /= zMult;
+
+        if (maxLS.z < 0.0f)
+            maxLS.z /= zMult;
+        else
+            maxLS.z *= zMult;
+
+        DirectX::XMMATRIX lightProj = DirectX::XMMatrixOrthographicOffCenterLH(
+            minLS.x,
+            maxLS.x,
+            minLS.y,
+            maxLS.y,
+            minLS.z,
+            maxLS.z);
+
+        DirectX::XMMATRIX lightViewProj = lightView * lightProj;
+
+        DirectX::XMStoreFloat4x4(
+            &m_lightView[cascade],
+            DirectX::XMMatrixTranspose(lightView));
+
+        DirectX::XMStoreFloat4x4(
+            &m_lightProj[cascade],
+            DirectX::XMMatrixTranspose(lightProj));
+
+        DirectX::XMStoreFloat4x4(
+            &m_lightViewProj[cascade],
+            DirectX::XMMatrixTranspose(lightViewProj));
+    }
+}
+
+void DirectXApp::RenderShadowPass()
+{
+    UpdateShadowConstants();
+
+    if (!m_shadowConstantBuffer || !m_mappedShadowConstantData)
+        return;
+
+    if (m_shadowMapState != D3D12_RESOURCE_STATE_DEPTH_WRITE)
+    {
+        D3D12_RESOURCE_BARRIER barrier = {};
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource = m_shadowMap.Get();
+        barrier.Transition.StateBefore = m_shadowMapState;
+        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+        m_cmdList->ResourceBarrier(1, &barrier);
+        m_shadowMapState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+    }
+
+    m_cmdList->RSSetViewports(1, &m_shadowViewport);
+    m_cmdList->RSSetScissorRects(1, &m_shadowScissor);
+
+    m_cmdList->SetGraphicsRootSignature(m_rootSignature.Get());
+    m_cmdList->SetPipelineState(m_shadowPSO.Get());
+
+    UINT dsvSize = m_d3dDevice->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+
+    const UINT64 cbStride = (sizeof(ConstantBufferData) + 255) & ~255ull;
+
+    for (UINT cascade = 0; cascade < SHADOW_CASCADE_COUNT; ++cascade)
+    {
+        D3D12_CPU_DESCRIPTOR_HANDLE shadowDsv =
+            m_shadowDsvHeap->GetCPUDescriptorHandleForHeapStart();
+        shadowDsv.ptr += cascade * dsvSize;
+
+        m_cmdList->ClearDepthStencilView(
+            shadowDsv,
+            D3D12_CLEAR_FLAG_DEPTH,
+            1.0f,
+            0,
+            0,
+            nullptr);
+
+        m_cmdList->OMSetRenderTargets(0, nullptr, FALSE, &shadowDsv);
+
+        ConstantBufferData shadowData = {};
+        shadowData.World = DirectX::XMMatrixTranspose(
+            DirectX::XMMatrixScaling(0.1f, 0.1f, 0.1f));
+
+        shadowData.View = DirectX::XMLoadFloat4x4(&m_lightView[cascade]);
+        shadowData.Proj = DirectX::XMLoadFloat4x4(&m_lightProj[cascade]);
+        shadowData.LightPos = DirectX::XMFLOAT4(-0.5f, -1.0f, -0.3f, 0.0f);
+        shadowData.LightColor = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+        shadowData.CameraPos = DirectX::XMFLOAT4(0, 0, 0, 0);
+        shadowData.Tiling = DirectX::XMFLOAT2(1, 1);
+        shadowData.UVOffset = DirectX::XMFLOAT2(0, 0);
+
+        memcpy(
+            m_mappedShadowConstantData + cascade * cbStride,
+            &shadowData,
+            sizeof(shadowData));
+
+        m_cmdList->SetGraphicsRootConstantBufferView(
+            0,
+            m_shadowConstantBuffer->GetGPUVirtualAddress() + cascade * cbStride);
+
+        if (renderSponza)
+        {
+            m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            m_cmdList->IASetVertexBuffers(0, 1, &m_vertexBufferView);
+            m_cmdList->IASetIndexBuffer(&m_indexBufferView);
+            m_cmdList->DrawIndexedInstanced(m_indexCount, 1, 0, 0, 0);
+        }
+    }
+
+    if (m_shadowMapState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
+    {
+        D3D12_RESOURCE_BARRIER barrier = {};
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource = m_shadowMap.Get();
+        barrier.Transition.StateBefore = m_shadowMapState;
+        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+        m_cmdList->ResourceBarrier(1, &barrier);
+        m_shadowMapState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    }
+}
+
+void DirectXApp::CreateShadowConstantBuffer()
+{
+    const UINT64 cbStride = (sizeof(ConstantBufferData) + 255) & ~255ull;
+    const UINT64 bufferSize = cbStride * SHADOW_CASCADE_COUNT;
+
+    D3D12_HEAP_PROPERTIES heapProps = {};
+    heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+    D3D12_RESOURCE_DESC bufferDesc = {};
+    bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufferDesc.Width = bufferSize;
+    bufferDesc.Height = 1;
+    bufferDesc.DepthOrArraySize = 1;
+    bufferDesc.MipLevels = 1;
+    bufferDesc.SampleDesc = { 1, 0 };
+    bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    ThrowIfFailed(m_d3dDevice->CreateCommittedResource(
+        &heapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &bufferDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&m_shadowConstantBuffer)));
+
+    D3D12_RANGE readRange = { 0, 0 };
+    ThrowIfFailed(m_shadowConstantBuffer->Map(
+        0,
+        &readRange,
+        reinterpret_cast<void**>(&m_mappedShadowConstantData)));
 }

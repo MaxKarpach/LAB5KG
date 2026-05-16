@@ -31,8 +31,14 @@ cbuffer DeferredLightCB : register(b1)
     float4 SpotLightDirectionCosine[4];
     float4 SpotLightColorIntensity[4];
     float4 ScreenSize;
+    float4 CameraPosition;
     float4x4 InvView;
     float4x4 InvProj;
+
+float4x4 LightViewProj[4];
+float4 CascadeSplits;
+float4 ShadowParams; // x = bias, y = shadow map size, z = cascade count
+float4 DebugParams; // x = shadow debug mode
 };
 
 cbuffer WaterCB : register(b3)
@@ -45,13 +51,81 @@ cbuffer WaterCB : register(b3)
 };
 
 Texture2D gMainTexture : register(t0);
-Texture2D gNormalMap : register(t1); // НОВО: карта нормалей
-Texture2D gDisplacementMap : register(t2); // НОВО: карта смещения
-SamplerState gSampler : register(s0);
+Texture2D gNormalMap : register(t1);
+Texture2D gDisplacementMap : register(t2);
 Texture2D<float4> GAlbedoSpec : register(t0);
 Texture2D<float4> GWorldPos : register(t1);
 Texture2D<float4> GNormal : register(t2);
 Texture2D<float4> GDepth : register(t3);
+Texture2DArray<float> ShadowMap : register(t4);
+
+SamplerState gSampler : register(s0);
+SamplerComparisonState ShadowSampler : register(s1);
+
+struct ShadowVSInput
+{
+    float3 Position : POSITION;
+    float3 Normal : NORMAL;
+    float4 Color : COLOR;
+    float2 TexCoord : TEXCOORD;
+    float3 Tangent : TANGENT;
+    float3 Binormal : BINORMAL;
+};
+
+float4 ShadowVSMain(ShadowVSInput input) : SV_POSITION
+{
+    float4 worldPos = mul(float4(input.Position, 1.0f), World);
+    float4 viewPos = mul(worldPos, View);
+    return mul(viewPos, Proj);
+}
+
+int GetCascadeIndex(float viewDepth)
+{
+    if (viewDepth < CascadeSplits.x)
+        return 0;
+
+    if (viewDepth < CascadeSplits.y)
+        return 1;
+
+    if (viewDepth < CascadeSplits.z)
+        return 2;
+
+    return 3;
+}
+
+float GetShadowPCF(float3 worldPos, int cascadeIndex)
+{
+    float4 lightPos = mul(float4(worldPos, 1.0f), LightViewProj[cascadeIndex]);
+    lightPos.xyz /= lightPos.w;
+
+    float2 uv = lightPos.xy * float2(0.5f, -0.5f) + 0.5f;
+
+    if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f)
+        return 1.0f;
+
+    if (lightPos.z < 0.0f || lightPos.z > 1.0f)
+        return 1.0f;
+
+    float depth = lightPos.z - ShadowParams.x;
+    float texelSize = 1.0f / ShadowParams.y;
+
+    float result = 0.0f;
+
+    [unroll]
+    for (int y = -1; y <= 1; ++y)
+    {
+        [unroll]
+        for (int x = -1; x <= 1; ++x)
+        {
+            result += ShadowMap.SampleCmpLevelZero(
+                ShadowSampler,
+                float3(uv + float2(x, y) * texelSize, cascadeIndex),
+                depth);
+        }
+    }
+
+    return result / 9.0f;
+}
 
 struct VSInput
 {
@@ -176,27 +250,82 @@ LightPassInput LightVSMain(uint vertexId : SV_VertexID)
     return output;
 }
 
+float CheckerPattern(float3 worldPos, float3 normal)
+{
+    float3 absN = abs(normal);
+    float2 uv;
+
+    // Выбираем плоскость проекции по направлению нормали
+    if (absN.y >= absN.x && absN.y >= absN.z)
+        uv = worldPos.xz; // пол / потолок
+    else if (absN.x >= absN.y && absN.x >= absN.z)
+        uv = worldPos.zy; // стены по X
+    else
+        uv = worldPos.xy; // стены по Z
+
+    float scale = 1.5f;
+    int2 cell = (int2)floor(uv * scale);
+
+    return ((cell.x + cell.y) & 1) ? 1.0f : 0.0f;
+}
+
 float4 LightPSMain(LightPassInput input) : SV_TARGET
 {
     int2 pixelPos = int2(input.Position.xy);
-    
+
     float4 albedo = GAlbedoSpec.Load(int3(pixelPos, 0));
     float3 worldPos = GWorldPos.Load(int3(pixelPos, 0)).xyz;
     float3 normalEncoded = GNormal.Load(int3(pixelPos, 0)).xyz;
     float depth = GDepth.Load(int3(pixelPos, 0)).x;
-    
+
     if (depth >= 1.0f)
         return float4(0.0f, 0.0f, 0.0f, 1.0f);
-    
+
     float3 normal = normalize(normalEncoded * 2.0f - 1.0f);
-    float3 lit = AmbientColor.rgb * albedo.rgb;
-    
-    // Directional light
+
     float3 directionalL = normalize(-DirectionalLightDirection.xyz);
     float directionalNdotL = saturate(dot(normal, directionalL));
-    lit += DirectionalLightColor.rgb * directionalNdotL * albedo.rgb * DirectionalLightColor.a;
-    
-    // Static point lights - используем staticIdx вместо i
+
+    float viewDepthForCascade = depth * 100.0f;
+    int cascadeIndex = GetCascadeIndex(viewDepthForCascade);
+    float shadow = GetShadowPCF(worldPos, cascadeIndex);
+
+    int debugMode = (int)DebugParams.x;
+
+    if (debugMode == 1)
+    {
+        return float4(shadow, shadow, shadow, 1.0f);
+    }
+
+    if (debugMode == 2)
+    {
+        shadow = 1.0f;
+    }
+
+    if (debugMode == 3)
+    {
+        if (cascadeIndex == 0)
+            return float4(1.0f, 0.0f, 0.0f, 1.0f);
+
+        if (cascadeIndex == 1)
+            return float4(0.0f, 1.0f, 0.0f, 1.0f);
+
+        if (cascadeIndex == 2)
+            return float4(0.0f, 0.0f, 1.0f, 1.0f);
+
+        return float4(1.0f, 1.0f, 0.0f, 1.0f);
+    }
+
+    float3 lit = AmbientColor.rgb * albedo.rgb;
+
+    float visibleShadow = lerp(0.25f, 1.0f, shadow);
+
+    lit += DirectionalLightColor.rgb *
+           directionalNdotL *
+           albedo.rgb *
+           DirectionalLightColor.a *
+           visibleShadow;
+
     int staticPointCount = 6;
     for (int staticIdx = 0; staticIdx < staticPointCount; ++staticIdx)
     {
@@ -205,53 +334,89 @@ float4 LightPSMain(LightPassInput input) : SV_TARGET
         float range = max(PointLightPositionRange[staticIdx].w, 0.0001f);
         float falloff = saturate(1.0f - dist / range);
         float attenuation = falloff * falloff;
-        
+
         float3 L = toLight / max(dist, 0.0001f);
         float ndotl = saturate(dot(normal, L));
         float intensity = PointLightColorIntensity[staticIdx].a;
-        lit += PointLightColorIntensity[staticIdx].rgb * ndotl * attenuation * intensity * albedo.rgb;
+
+        lit += PointLightColorIntensity[staticIdx].rgb *
+               ndotl *
+               attenuation *
+               intensity *
+               albedo.rgb;
     }
-    
-    // Dynamic lights - используем dynamicIdx вместо i
-    int dynamicCount = (int) LightCounts.z;
+
+    int dynamicCount = (int)LightCounts.z;
     for (int dynamicIdx = 0; dynamicIdx < dynamicCount; ++dynamicIdx)
     {
         int idx = staticPointCount + dynamicIdx;
+
         float3 toLight = PointLightPositionRange[idx].xyz - worldPos;
         float dist = length(toLight);
         float range = max(PointLightPositionRange[idx].w, 0.0001f);
         float falloff = saturate(1.0f - dist / range);
         float attenuation = falloff * falloff;
-        
+
         float3 L = toLight / max(dist, 0.0001f);
         float ndotl = saturate(dot(normal, L));
         float intensity = PointLightColorIntensity[idx].a;
-        lit += PointLightColorIntensity[idx].rgb * ndotl * attenuation * intensity * albedo.rgb;
+
+        lit += PointLightColorIntensity[idx].rgb *
+               ndotl *
+               attenuation *
+               intensity *
+               albedo.rgb;
     }
-    
-    // Spot lights - используем spotIdx вместо i
-    int spotCount = (int) LightCounts.y;
+
+    int spotCount = (int)LightCounts.y;
     for (int spotIdx = 0; spotIdx < spotCount; ++spotIdx)
     {
         float3 toLight = SpotLightPositionRange[spotIdx].xyz - worldPos;
         float dist = length(toLight);
         float range = max(SpotLightPositionRange[spotIdx].w, 0.0001f);
         float3 L = toLight / max(dist, 0.0001f);
-        
+
         float falloff = saturate(1.0f - dist / range);
         float attenuation = falloff * falloff;
-        
+
         float3 spotDir = normalize(SpotLightDirectionCosine[spotIdx].xyz);
         float coneCos = SpotLightDirectionCosine[spotIdx].w;
-        float spotAmount = saturate((dot(-L, spotDir) - coneCos) / max(1.0f - coneCos, 0.0001f));
+        float spotAmount = saturate(
+            (dot(-L, spotDir) - coneCos) / max(1.0f - coneCos, 0.0001f)
+        );
+
         spotAmount = spotAmount * spotAmount * spotAmount;
-        
+
         float ndotl = saturate(dot(normal, L));
         float intensity = SpotLightColorIntensity[spotIdx].a;
-        lit += SpotLightColorIntensity[spotIdx].rgb * ndotl * attenuation * spotAmount * intensity * albedo.rgb;
+
+        lit += SpotLightColorIntensity[spotIdx].rgb *
+               ndotl *
+               attenuation *
+               spotAmount *
+               intensity *
+               albedo.rgb;
     }
-    
-    float3 litSRGB = pow(saturate(lit), 1.0f / 2.2f);
+
+    float3 shadowedLit = lit * lerp(0.01f, 1.0f, shadow);
+
+    if (debugMode == 4)
+    {
+        float shadowMask = 1.0f - smoothstep(0.65f, 0.98f, shadow);
+
+        float checker = CheckerPattern(worldPos, normal);
+
+        float3 checkerDark = float3(0.02f, 0.02f, 0.025f);
+        float3 checkerLight = float3(0.85f, 0.85f, 0.85f);
+        float3 checkerColor = lerp(checkerDark, checkerLight, checker);
+
+        float3 checkerLit = lerp(shadowedLit, checkerColor * albedo.rgb, shadowMask);
+
+        float3 checkerSRGB = pow(saturate(checkerLit), 1.0f / 2.2f);
+        return float4(checkerSRGB, albedo.a);
+    }
+
+    float3 litSRGB = pow(saturate(shadowedLit), 1.0f / 2.2f);
     return float4(litSRGB, albedo.a);
 }
 
@@ -1292,7 +1457,7 @@ RWStructuredBuffer<SortEntry> g_SortList : register(u2);
 AppendStructuredBuffer<SortEntry> g_AliveSortList : register(u2);
 #endif
 
-#if defined(PARTICLE_SORT)
+#if defined(PARTICLE_CLEAR_SORT) || defined(PARTICLE_SORT)
 RWStructuredBuffer<SortEntry> g_SortList : register(u2);
 #endif
 
@@ -1476,6 +1641,25 @@ void BitonicSortCS(uint3 DTid : SV_DispatchThreadID)
             g_SortList[j] = a;
         }
     }
+#endif
+}
+
+[numthreads(256,1,1)]
+void ClearSortListCS(uint3 DTid : SV_DispatchThreadID)
+{
+    uint index = DTid.x;
+    uint maxParticles = asuint(C0.x);
+
+    if (index >= maxParticles)
+        return;
+
+#if defined(PARTICLE_CLEAR_SORT)
+    SortEntry s;
+    s.ParticleIndex = 0xFFFFFFFFu;
+    s.DistanceSq = -1.0f;
+    s.Padding0 = 0.0f;
+    s.Padding1 = 0.0f;
+    g_SortList[index] = s;
 #endif
 }
 

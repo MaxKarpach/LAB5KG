@@ -124,8 +124,13 @@ private:
         DirectX::XMFLOAT4 SpotLightDirectionCosine[4];
         DirectX::XMFLOAT4 SpotLightColorIntensity[4];
         DirectX::XMFLOAT4 ScreenSize;
+        DirectX::XMFLOAT4 CameraPosition;
         DirectX::XMFLOAT4X4 InvView;
         DirectX::XMFLOAT4X4 InvProj;
+        DirectX::XMFLOAT4X4 LightViewProj[4];
+        DirectX::XMFLOAT4 CascadeSplits;
+        DirectX::XMFLOAT4 ShadowParams; // x = bias, y = shadowMapSize, z = cascadeCount
+        DirectX::XMFLOAT4 DebugParams; // x = shadow debug mode
     };
 
     // Window properties
@@ -375,8 +380,8 @@ private:
     };
 
     // Флаги для управления рендером
-    const bool renderSponza = false;
-    const bool renderWater = true;
+    const bool renderSponza = true;
+    const bool renderWater = false;
 
     // Визуализация KD-дерева
     bool m_showKDTree = true;          // всегда показывать при режиме Octree
@@ -591,4 +596,53 @@ private:
     void CopyParticleCounterToReadback(ID3D12Resource* counterResource, ID3D12Resource* readbackResource);
     void TransitionParticleComputeResources(D3D12_RESOURCE_STATES state);
 
+    static constexpr UINT SHADOW_MAP_SIZE = 2048;
+    static constexpr UINT SHADOW_CASCADE_COUNT = 4;
+    static constexpr UINT SHADOW_SRV_SLOT = 4;
+
+    ComPtr<ID3D12Resource> m_shadowMap;
+    ComPtr<ID3D12DescriptorHeap> m_shadowDsvHeap;
+    ComPtr<ID3D12PipelineState> m_shadowPSO;
+
+    D3D12_VIEWPORT m_shadowViewport = {};
+    D3D12_RECT m_shadowScissor = {};
+    D3D12_RESOURCE_STATES m_shadowMapState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+
+    DirectX::XMFLOAT4X4 m_lightView[SHADOW_CASCADE_COUNT] = {};
+    DirectX::XMFLOAT4X4 m_lightProj[SHADOW_CASCADE_COUNT] = {};
+    DirectX::XMFLOAT4X4 m_lightViewProj[SHADOW_CASCADE_COUNT] = {};
+    DirectX::XMFLOAT4 m_cascadeSplits = {};
+
+    void CreateShadowMap();
+    void CreateShadowPipeline();
+    void UpdateShadowConstants();
+    void RenderShadowPass();
+
+    enum class ShadowDebugMode
+    {
+        Normal = 0,
+        ShadowMask = 1,
+        NoShadows = 2,
+        CascadeColors = 3,
+        CheckerShadows = 4
+    };
+
+    ComPtr<ID3D12Resource> m_shadowConstantBuffer;
+    uint8_t* m_mappedShadowConstantData = nullptr;
+
+    void CreateShadowConstantBuffer();
+
+    ShadowDebugMode m_shadowDebugMode = ShadowDebugMode::Normal;
+    bool m_prevBKey = false;
+
+    struct ParticleSortConstants
+    {
+        uint32_t ElementCount;
+        uint32_t SubArray;
+        uint32_t CompareDistance;
+        uint32_t SortDescending;
+    };
+
+    ComPtr<ID3D12Resource> m_particleSortCB;
+    ComPtr<ID3D12PipelineState> m_particleClearSortPSO;
 };

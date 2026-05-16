@@ -58,7 +58,7 @@ bool GBuffer::CreateDescriptorHeaps()
     ThrowIfFailed(m_device->CreateDescriptorHeap(&rtvDesc, IID_PPV_ARGS(&m_rtvHeap)));
 
     D3D12_DESCRIPTOR_HEAP_DESC srvDesc = {};
-    srvDesc.NumDescriptors = TargetCount;
+    srvDesc.NumDescriptors = TargetCount + 4;
     srvDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srvDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     ThrowIfFailed(m_device->CreateDescriptorHeap(&srvDesc, IID_PPV_ARGS(&m_srvHeap)));
@@ -66,6 +66,22 @@ bool GBuffer::CreateDescriptorHeaps()
     m_rtvDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
     m_srvDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     return true;
+}
+
+void GBuffer::CreateExternalSRV(
+    UINT slot,
+    ID3D12Resource* resource,
+    const D3D12_SHADER_RESOURCE_VIEW_DESC& srvDesc)
+{
+    D3D12_CPU_DESCRIPTOR_HANDLE handle =
+        m_srvHeap->GetCPUDescriptorHandleForHeapStart();
+
+    handle.ptr += slot * m_srvDescriptorSize;
+
+    m_device->CreateShaderResourceView(
+        resource,
+        &srvDesc,
+        handle);
 }
 
 bool GBuffer::CreateRenderTargets()
