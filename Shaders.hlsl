@@ -1584,17 +1584,31 @@ void ParticleUpdateCS(uint3 DTid : SV_DispatchThreadID)
 
     p.Age += dt;
     p.Life -= dt;
+
     p.Velocity += gravity * p.Weight * dt;
     p.Position += p.Velocity * dt;
 
-    if (p.Life <= 0.0f || (useGround != 0 && p.Position.y <= groundY))
+    if (p.Life <= 0.0f)
     {
         p.Life = -1.0f;
         g_Particles[index] = p;
+
 #if defined(PARTICLE_UPDATE)
         g_DeadListAppend.Append(index);
 #endif
         return;
+    }
+
+    // Bounce from floor instead of dying on contact.
+    if (useGround != 0 && p.Position.y <= groundY && p.Velocity.y < 0.0f)
+    {
+        float bounce = 0.65f;
+        float friction = 0.82f;
+
+        p.Position.y = groundY;
+        p.Velocity.y = -p.Velocity.y * bounce;
+        p.Velocity.x *= friction;
+        p.Velocity.z *= friction;
     }
 
     g_Particles[index] = p;

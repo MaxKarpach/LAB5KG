@@ -4105,7 +4105,7 @@ void DirectXApp::UpdateParticles(float deltaTime)
         update.TotalTime = m_particleTotalTime;
         update.MaxParticles = MAX_PARTICLES;
         update.Gravity = DirectX::XMFLOAT3(0.0f, -9.8f, 0.0f);
-        update.GroundY = -20.0f;
+        update.GroundY = 0.0f;
         update.CameraPosition = camPos;
         update.EnableGroundCollision = 1;
 
