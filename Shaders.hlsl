@@ -50,6 +50,13 @@ cbuffer WaterCB : register(b3)
     float Padding[4];
 };
 
+cbuffer PostProcessCB : register(b4)
+{
+    float4 PostScreenSize;
+    float4 PostParams0;
+    float4 PostParams1;
+};
+
 Texture2D gMainTexture : register(t0);
 Texture2D gNormalMap : register(t1);
 Texture2D gDisplacementMap : register(t2);
@@ -58,6 +65,7 @@ Texture2D<float4> GWorldPos : register(t1);
 Texture2D<float4> GNormal : register(t2);
 Texture2D<float4> GDepth : register(t3);
 Texture2DArray<float> ShadowMap : register(t4);
+Texture2D<float4> SceneColor : register(t5);
 
 SamplerState gSampler : register(s0);
 SamplerComparisonState ShadowSampler : register(s1);
@@ -412,12 +420,10 @@ float4 LightPSMain(LightPassInput input) : SV_TARGET
 
         float3 checkerLit = lerp(shadowedLit, checkerColor * albedo.rgb, shadowMask);
 
-        float3 checkerSRGB = pow(saturate(checkerLit), 1.0f / 2.2f);
-        return float4(checkerSRGB, albedo.a);
+        return float4(checkerLit, albedo.a);
     }
 
-    float3 litSRGB = pow(saturate(shadowedLit), 1.0f / 2.2f);
-    return float4(litSRGB, albedo.a);
+        return float4(shadowedLit, albedo.a);
 }
 
 // ========== ТЕССЕЛЯЦИЯ ==========
@@ -729,12 +735,8 @@ GBufferOutput TessGeometryPSMain(TessGeometryPSInput input)
     
     float4 albedo = gMainTexture.Sample(gSampler, input.UV);
     
-    // ===== ВИЗУАЛИЗАЦИЯ HEIGHT =====
-    float height = gDisplacementMap.Sample(gSampler, input.UV).r;
-    
     // Временная визуализация: показываем height вместо albedo
-    // Черный = 0, Белый = 1, Серый = 0.5
-    albedo = float4(height, height, height, 1.0f);
+
     // ================================
     
     // ДОБАВИТЬ: normal mapping для deferred
@@ -1787,4 +1789,199 @@ void ParticleGSMain(point ParticleVSOutput input[1], inout TriangleStream<Partic
 float4 ParticlePSMain(ParticleGSOutput input) : SV_TARGET
 {
     return input.Color;
+}
+
+struct PostProcessInput
+{
+    float4 Position : SV_POSITION;
+    float2 UV : TEXCOORD0;
+};
+
+PostProcessInput PostProcessVSMain(uint vertexId : SV_VertexID)
+{
+    PostProcessInput output;
+
+    float2 uv = float2((vertexId << 1) & 2, vertexId & 2);
+
+    output.Position = float4(
+        uv * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f),
+        0.0f,
+        1.0f);
+
+    output.UV = uv;
+
+    return output;
+}
+
+float Hash12(float2 p)
+{
+    float3 p3 = frac(float3(p.xyx) * 0.1031f);
+    p3 += dot(p3, p3.yzx + 33.33f);
+    return frac((p3.x + p3.y) * p3.z);
+}
+
+float3 ApplyColorCorrection(float3 color, float contrast, float saturation)
+{
+    color = (color - 0.5f) * contrast + 0.5f;
+
+    float luminance = dot(color, float3(0.2126f, 0.7152f, 0.0722f));
+    color = lerp(float3(luminance, luminance, luminance), color, saturation);
+
+    float3 tint = float3(1.03f, 1.00f, 0.96f);
+    color *= tint;
+
+    return color;
+}
+
+float3 ApplyVCRFilter(float2 uv, float2 pixelPos, float time, float strength)
+{
+    float scanY = floor(pixelPos.y);
+    float frame = floor(time * 24.0f);
+
+    float wobble =
+        sin(uv.y * 42.0f + time * 3.2f) * 1.2f +
+        sin(uv.y * 137.0f - time * 6.7f) * 0.45f;
+
+    float lineNoise = Hash12(float2(scanY * 0.031f, frame));
+    float lineJitter = (lineNoise - 0.5f) * 3.0f;
+
+    float tearCenter = Hash12(float2(frame, 17.23f));
+    float tearBand = 1.0f - smoothstep(0.0f, 0.035f, abs(uv.y - tearCenter));
+    float tearNoise = Hash12(float2(frame * 3.1f, scanY * 0.007f));
+    float tearOffset = tearBand * (tearNoise - 0.5f) * 18.0f;
+
+    float xOffsetPixels = wobble + lineJitter + tearOffset;
+    float2 distortedUv = saturate(uv + float2(xOffsetPixels * PostScreenSize.z, 0.0f));
+
+    float chromaPixels = 2.0f + tearBand * 3.0f;
+    float2 chromaOffset = float2(chromaPixels * PostScreenSize.z, 0.0f);
+
+    float3 color;
+    color.r = SceneColor.Sample(gSampler, saturate(distortedUv + chromaOffset)).r;
+    color.g = SceneColor.Sample(gSampler, distortedUv).g;
+    color.b = SceneColor.Sample(gSampler, saturate(distortedUv - chromaOffset)).b;
+
+    float3 bleedA = SceneColor.Sample(
+        gSampler,
+        saturate(distortedUv - float2(PostScreenSize.z * 2.0f, 0.0f))
+    ).rgb;
+
+    float3 bleedB = SceneColor.Sample(
+        gSampler,
+        saturate(distortedUv + float2(PostScreenSize.z * 2.0f, 0.0f))
+    ).rgb;
+
+    color = lerp(color, (color + bleedA + bleedB) / 3.0f, 0.18f);
+
+    float scanline = 0.86f + 0.14f * sin(pixelPos.y * 3.14159265f);
+    color *= scanline;
+
+    float tapeNoise = Hash12(pixelPos + time * 83.0f) - 0.5f;
+    color += tapeNoise * 0.055f;
+
+    float speck = smoothstep(0.995f, 1.0f, Hash12(pixelPos * 0.37f + frame));
+    color += speck * 0.20f;
+
+    float trackingBand =
+        1.0f - smoothstep(
+            0.0f,
+            0.018f,
+            abs(uv.y - frac(time * 0.17f))
+        );
+
+    color *= 1.0f - trackingBand * 0.18f;
+
+    float luminance = dot(color, float3(0.2126f, 0.7152f, 0.0722f));
+    color = lerp(float3(luminance, luminance, luminance), color, 0.78f);
+    color = (color - 0.5f) * 1.12f + 0.5f;
+
+    float3 clean = SceneColor.Sample(gSampler, uv).rgb;
+
+    return lerp(clean, max(color, 0.0f), strength);
+}
+
+float ComputeGBufferEdge(int2 pixelPos)
+{
+    float centerDepth = GDepth.Load(int3(pixelPos, 0)).x;
+    float3 centerNormal = GNormal.Load(int3(pixelPos, 0)).xyz * 2.0f - 1.0f;
+
+    float edge = 0.0f;
+
+    int2 offsets[4] =
+    {
+        int2(1, 0),
+        int2(-1, 0),
+        int2(0, 1),
+        int2(0, -1)
+    };
+
+int2 screenSize = int2(PostScreenSize.xy);
+
+[unroll]
+for (int i = 0; i < 4; ++i)
+{
+    int2 samplePos = clamp(pixelPos + offsets[i], int2(0, 0), screenSize - int2(1, 1));
+
+    float sampleDepth = GDepth.Load(int3(samplePos, 0)).x;
+    float3 sampleNormal = GNormal.Load(int3(samplePos, 0)).xyz * 2.0f - 1.0f;
+
+    float depthDiff = abs(centerDepth - sampleDepth);
+    float normalDiff = 1.0f - saturate(dot(normalize(centerNormal), normalize(sampleNormal)));
+
+    edge = max(edge, depthDiff * 35.0f);
+    edge = max(edge, normalDiff * 2.0f);
+}
+
+    return saturate(edge);
+}
+
+float4 PostProcessPSMain(PostProcessInput input) : SV_TARGET
+{
+    float2 uv = input.UV;
+    float2 center = float2(0.5f, 0.5f);
+    float2 fromCenter = uv - center;
+    float distanceFromCenter = length(fromCenter);
+
+    float vignetteStrength = PostParams0.x;
+    float chromaticStrength = PostParams0.y;
+    float grainStrength = PostParams0.z;
+    float edgeStrength = PostParams0.w;
+
+    float time = PostParams1.x;
+    float contrast = PostParams1.y;
+    float saturation = PostParams1.z;
+
+float vcrStrength = chromaticStrength;
+float3 color = ApplyVCRFilter(uv, input.Position.xy, time, vcrStrength);
+
+
+if (PostParams1.w > 0.5f)
+{
+    return float4(saturate(color), 1.0f);
+}
+
+    // 1. Vignette
+    float vignette = smoothstep(0.95f, 0.20f, distanceFromCenter);
+    color *= lerp(1.0f, vignette, vignetteStrength);
+
+    // 2. Color correction
+    color = ApplyColorCorrection(color, contrast, saturation);
+
+    // 3. G-buffer edge detection: uses GDepth and GNormal
+    int2 pixelPos = int2(input.Position.xy);
+    float edge = ComputeGBufferEdge(pixelPos);
+    color = lerp(color, color * 0.12f, edge * edgeStrength);
+
+    // 4. Film grain
+    float grain = Hash12(input.Position.xy + time * 60.0f) - 0.5f;
+    color += grain * grainStrength;
+
+color = max(color, 0.0f);
+
+color *= 1.25f;
+color = color / (color + 1.0f);
+
+color = pow(saturate(color), 1.0f / 2.2f); 
+
+return float4(color, 1.0f);
 }

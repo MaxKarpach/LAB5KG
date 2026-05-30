@@ -645,4 +645,36 @@ private:
 
     ComPtr<ID3D12Resource> m_particleSortCB;
     ComPtr<ID3D12PipelineState> m_particleClearSortPSO;
+
+    static constexpr UINT SCENE_COLOR_SRV_SLOT = 5;
+
+    void CreateSceneColorTarget();
+    void CreatePostProcessRootSignature();
+    void CreatePostProcessPipeline();
+    void CreatePostProcessConstantBuffer();
+    void RenderPostProcessPass();
+
+    struct PostProcessCB
+    {
+        DirectX::XMFLOAT4 ScreenSize; // x=width, y=height, z=1/width, w=1/height
+        DirectX::XMFLOAT4 Params0;    // x=vignette, y=chromatic, z=grain, w=color amount
+        DirectX::XMFLOAT4 Params1;    // x=time, y=contrast, z=saturation, w=unused
+    };
+
+    ComPtr<ID3D12Resource> m_sceneColor;
+    ComPtr<ID3D12DescriptorHeap> m_sceneColorRTVHeap;
+
+    ComPtr<ID3D12RootSignature> m_postProcessRootSignature;
+    ComPtr<ID3D12PipelineState> m_postProcessPSO;
+    ComPtr<ID3D12Resource> m_postProcessConstantBuffer;
+    PostProcessCB* m_mappedPostProcessData = nullptr;
+
+    float m_postProcessTime = 0.0f;
+
+    // Post-process toggles
+    bool m_enableVCR = true;
+    bool m_enableEdgeDetection = true;
+
+    bool m_prevFKey = false;
+    bool m_prevGKey = false;
 };
