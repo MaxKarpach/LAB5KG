@@ -379,8 +379,8 @@ if (depthMaterial.a < 0.5f)
     float3 V = normalize(CameraPosition.xyz - worldPos);
 
 float roughness = saturate(albedoRoughness.a);
-float metallic = 0.0f;
-float ao = 1.0f;
+float metallic = saturate(depthMaterial.y);
+float ao = saturate(depthMaterial.z);
 
 float viewDepthForCascade = depth * 300.0f;
     int cascadeIndex = GetCascadeIndex(viewDepthForCascade);
@@ -1318,6 +1318,7 @@ struct VSInstancedOutput
     float2 UV : TEXCOORD2;
     float ViewDepth : TEXCOORD3;
     float4 Color : COLOR;
+    float Metallic: TEXCOORD4;
 };
 
 VSInstancedOutput CubeVSInstanced(VSInstancedInput input)
@@ -1335,6 +1336,7 @@ VSInstancedOutput CubeVSInstanced(VSInstancedInput input)
     output.UV = input.TexCoord;
     output.ViewDepth = viewPos.z;
     output.Color = float4(input.InstanceColor, 1.0f);
+    output.Metallic = input.InstancePadding;
     
     return output;
 }
@@ -1348,8 +1350,11 @@ GBufferOutput CubePSInstanced(VSInstancedOutput input) : SV_TARGET
     float3 normal = normalize(input.NormalW);
     float depth = saturate(input.ViewDepth / 300.0f);
     
-float roughness = 0.45f;
-float metallic = 0.0f;
+float metallic = saturate(input.Metallic);
+
+float roughness = saturate((input.WorldPos.z + 50.0f) / 100.0f);
+roughness = max(roughness, 0.04f);
+
 float ao = 1.0f;
 
 o.AlbedoSpec = float4(albedo.rgb, roughness);

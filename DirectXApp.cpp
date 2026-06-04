@@ -3041,7 +3041,7 @@ void DirectXApp::UpdateInstanceBuffer(const std::vector<int>& visibleIndices)
         m_visibleInstanceData[i].Position = m_cubes[idx].Position;
         m_visibleInstanceData[i].Scale = m_cubes[idx].Scale;
         m_visibleInstanceData[i].Color = m_cubes[idx].Color;
-        m_visibleInstanceData[i].Padding = 0.0f;
+        m_visibleInstanceData[i].Padding = (idx % 5) / 4.0f; // metallic: 0.0, 0.25, 0.5, 0.75, 1.0
     }
 
     UINT64 dataSize = visibleIndices.size() * sizeof(InstanceData);
@@ -3538,7 +3538,7 @@ void DirectXApp::UpdateInstanceBufferForLOD(int lod, const std::vector<int>& ind
         m_visibleInstanceData[i].Position = m_cubes[idx].Position;
         m_visibleInstanceData[i].Scale = m_cubes[idx].Scale;
         m_visibleInstanceData[i].Color = m_cubes[idx].Color;
-        m_visibleInstanceData[i].Padding = 0.0f;
+        m_visibleInstanceData[i].Padding = (idx % 5) / 4.0f; // metallic: 0.0, 0.25, 0.5, 0.75, 1.0
     }
 
     UINT64 dataSize = indices.size() * sizeof(InstanceData);

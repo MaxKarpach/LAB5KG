@@ -578,7 +578,7 @@ private:
 
     float m_particleTotalTime = 0.0f;
 
-    bool renderCubes = false;
+    bool renderCubes = true;
     UINT64 m_counterReadbackFenceValues[2] = {};
     uint32_t m_lastKnownDeadCount = MAX_PARTICLES;
     ComPtr<ID3D12PipelineState> m_particleSortPSO;
