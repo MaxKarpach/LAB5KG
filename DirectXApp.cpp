@@ -1835,7 +1835,7 @@ bool DirectXApp::Initialize()
                 normalData = LoadTextureWIC(workingDir + L"normal.jpg");
             if (normalData.valid)
             {
-                UploadTexture(normalData, 2, true);
+                UploadTexture(normalData, 1, true);
                 m_useNormalMap = true;
             }
 
@@ -1844,7 +1844,7 @@ bool DirectXApp::Initialize()
                 displacementData = LoadTextureWIC(workingDir + L"displacement.jpg");
             if (displacementData.valid)
             {
-                UploadTexture(displacementData, 3, false);
+                UploadTexture(displacementData, 2, false);
                 m_useDisplacement = true;
             }
 
