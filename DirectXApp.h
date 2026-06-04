@@ -646,8 +646,6 @@ private:
     ComPtr<ID3D12Resource> m_particleSortCB;
     ComPtr<ID3D12PipelineState> m_particleClearSortPSO;
 
-    static constexpr UINT SCENE_COLOR_SRV_SLOT = 5;
-
     void CreateSceneColorTarget();
     void CreatePostProcessRootSignature();
     void CreatePostProcessPipeline();
@@ -677,4 +675,15 @@ private:
 
     bool m_prevFKey = false;
     bool m_prevGKey = false;
+
+    static constexpr UINT SCENE_COLOR_SRV_SLOT = 5;
+    static constexpr UINT IBL_IRRADIANCE_SRV_SLOT = 6;
+    static constexpr UINT IBL_PREFILTER_SRV_SLOT = 7;
+    static constexpr UINT IBL_BRDF_LUT_SRV_SLOT = 8;
+
+    ComPtr<ID3D12Resource> m_irradianceMap;
+    ComPtr<ID3D12Resource> m_prefilteredEnvMap;
+    ComPtr<ID3D12Resource> m_brdfIntegrationMap;
+
+    void LoadIBLTextures();
 };

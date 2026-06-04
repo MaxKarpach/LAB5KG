@@ -5,10 +5,10 @@ namespace
 {
     constexpr std::array<DXGI_FORMAT, GBuffer::TargetCount> kFormats =
     {
-        DXGI_FORMAT_R8G8B8A8_UNORM,      // AlbedoSpec
-        DXGI_FORMAT_R16G16B16A16_FLOAT,  // WorldPosition
-        DXGI_FORMAT_R16G16B16A16_FLOAT,  // Normal
-        DXGI_FORMAT_R32_FLOAT             // Depth
+        DXGI_FORMAT_R8G8B8A8_UNORM,
+        DXGI_FORMAT_R16G16B16A16_FLOAT,
+        DXGI_FORMAT_R16G16B16A16_FLOAT,
+        DXGI_FORMAT_R16G16B16A16_FLOAT // было R32_FLOAT
     };
 
     constexpr std::array<float, 4> kClearAlbedo = { 0.0f, 0.0f, 0.0f, 1.0f };
@@ -58,7 +58,7 @@ bool GBuffer::CreateDescriptorHeaps()
     ThrowIfFailed(m_device->CreateDescriptorHeap(&rtvDesc, IID_PPV_ARGS(&m_rtvHeap)));
 
     D3D12_DESCRIPTOR_HEAP_DESC srvDesc = {};
-    srvDesc.NumDescriptors = TargetCount + 4;
+    srvDesc.NumDescriptors = TargetCount + 5;
     srvDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srvDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     ThrowIfFailed(m_device->CreateDescriptorHeap(&srvDesc, IID_PPV_ARGS(&m_srvHeap)));

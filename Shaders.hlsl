@@ -66,6 +66,9 @@ Texture2D<float4> GNormal : register(t2);
 Texture2D<float4> GDepth : register(t3);
 Texture2DArray<float> ShadowMap : register(t4);
 Texture2D<float4> SceneColor : register(t5);
+TextureCube<float4> IrradianceMap : register(t6);
+TextureCube<float4> PrefilterMap : register(t7);
+Texture2D<float2> BrdfLUT : register(t8);
 
 SamplerState gSampler : register(s0);
 SamplerComparisonState ShadowSampler : register(s1);
@@ -235,12 +238,16 @@ GBufferOutput GeometryPSMain(GeometryPSInput input)
     float4 albedo = gMainTexture.Sample(gSampler, input.UV);
     
     float3 normal = normalize(input.NormalW);
-    float depth = saturate(input.ViewDepth / 100.0f);
+    float depth = saturate(input.ViewDepth / 300.0f);
     
-    o.AlbedoSpec = albedo;
-    o.WorldPos = float4(input.WorldPos, 1.0f);
-    o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
-    o.Depth = float4(depth, depth, depth, 1.0f);
+float roughness = 0.45f;
+float metallic = 0.0f;
+float ao = 1.0f;
+
+o.AlbedoSpec = float4(albedo.rgb, roughness);
+o.WorldPos = float4(input.WorldPos, 1.0f);
+o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
+o.Depth = float4(depth, metallic, ao, 1.0f);
     
     return o;
 }
@@ -277,24 +284,105 @@ float CheckerPattern(float3 worldPos, float3 normal)
     return ((cell.x + cell.y) & 1) ? 1.0f : 0.0f;
 }
 
+static const float PI = 3.14159265359f;
+
+float DistributionGGX(float3 N, float3 H, float roughness)
+{
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float NdotH = max(dot(N, H), 0.0f);
+    float denom = NdotH * NdotH * (a2 - 1.0f) + 1.0f;
+
+    return a2 / max(PI * denom * denom, 0.0001f);
+}
+
+float GeometrySchlickGGX(float NdotV, float roughness)
+{
+    float r = roughness + 1.0f;
+    float k = (r * r) / 8.0f;
+
+    return NdotV / max(NdotV * (1.0f - k) + k, 0.0001f);
+}
+
+float GeometrySmith(float3 N, float3 V, float3 L, float roughness)
+{
+    float NdotV = max(dot(N, V), 0.0f);
+    float NdotL = max(dot(N, L), 0.0f);
+
+    float ggxV = GeometrySchlickGGX(NdotV, roughness);
+    float ggxL = GeometrySchlickGGX(NdotL, roughness);
+
+    return ggxV * ggxL;
+}
+
+float3 FresnelSchlick(float cosTheta, float3 F0)
+{
+    return F0 + (1.0f - F0) * pow(saturate(1.0f - cosTheta), 5.0f);
+}
+
+float3 FresnelSchlickRoughness(float cosTheta, float3 F0, float roughness)
+{
+    return F0 + (max(float3(1.0f - roughness, 1.0f - roughness, 1.0f - roughness), F0) - F0) *
+        pow(saturate(1.0f - cosTheta), 5.0f);
+}
+
+float3 CalculatePBRLight(
+    float3 albedo,
+    float3 N,
+    float3 V,
+    float3 L,
+    float3 radiance,
+    float roughness,
+    float metallic)
+{
+    float3 H = normalize(V + L);
+
+    float NdotL = max(dot(N, L), 0.0f);
+    float NdotV = max(dot(N, V), 0.0f);
+
+    float3 F0 = float3(0.04f, 0.04f, 0.04f);
+    F0 = lerp(F0, albedo, metallic);
+
+    float D = DistributionGGX(N, H, roughness);
+    float G = GeometrySmith(N, V, L, roughness);
+    float3 F = FresnelSchlick(max(dot(H, V), 0.0f), F0);
+
+    float3 numerator = D * G * F;
+    float denominator = max(4.0f * NdotV * NdotL, 0.0001f);
+    float3 specular = numerator / denominator;
+
+    float3 kS = F;
+    float3 kD = 1.0f - kS;
+    kD *= 1.0f - metallic;
+
+    float3 diffuse = kD * albedo / PI;
+
+    return (diffuse + specular) * radiance * NdotL;
+}
+
 float4 LightPSMain(LightPassInput input) : SV_TARGET
 {
     int2 pixelPos = int2(input.Position.xy);
 
-    float4 albedo = GAlbedoSpec.Load(int3(pixelPos, 0));
-    float3 worldPos = GWorldPos.Load(int3(pixelPos, 0)).xyz;
-    float3 normalEncoded = GNormal.Load(int3(pixelPos, 0)).xyz;
-    float depth = GDepth.Load(int3(pixelPos, 0)).x;
+float4 albedoRoughness = GAlbedoSpec.Load(int3(pixelPos, 0));
+float3 worldPos = GWorldPos.Load(int3(pixelPos, 0)).xyz;
+float3 normalEncoded = GNormal.Load(int3(pixelPos, 0)).xyz;
+float4 depthMaterial = GDepth.Load(int3(pixelPos, 0));
 
-    if (depth >= 1.0f)
-        return float4(0.0f, 0.0f, 0.0f, 1.0f);
+float depth = depthMaterial.x;
 
-    float3 normal = normalize(normalEncoded * 2.0f - 1.0f);
+if (depthMaterial.a < 0.5f)
+    return float4(0.0f, 0.0f, 0.0f, 1.0f);
 
-    float3 directionalL = normalize(-DirectionalLightDirection.xyz);
-    float directionalNdotL = saturate(dot(normal, directionalL));
+    float3 albedoColor = albedoRoughness.rgb;
+    float3 N = normalize(normalEncoded * 2.0f - 1.0f);
+    float3 V = normalize(CameraPosition.xyz - worldPos);
 
-    float viewDepthForCascade = depth * 100.0f;
+float roughness = saturate(albedoRoughness.a);
+float metallic = 0.0f;
+float ao = 1.0f;
+
+float viewDepthForCascade = depth * 300.0f;
     int cascadeIndex = GetCascadeIndex(viewDepthForCascade);
     float shadow = GetShadowPCF(worldPos, cascadeIndex);
 
@@ -324,15 +412,24 @@ float4 LightPSMain(LightPassInput input) : SV_TARGET
         return float4(1.0f, 1.0f, 0.0f, 1.0f);
     }
 
-    float3 lit = AmbientColor.rgb * albedo.rgb;
+    float3 Lo = float3(0.0f, 0.0f, 0.0f);
 
     float visibleShadow = lerp(0.25f, 1.0f, shadow);
 
-    lit += DirectionalLightColor.rgb *
-           directionalNdotL *
-           albedo.rgb *
-           DirectionalLightColor.a *
-           visibleShadow;
+    float3 directionalL = normalize(-DirectionalLightDirection.xyz);
+    float3 directionalRadiance =
+        DirectionalLightColor.rgb *
+        DirectionalLightColor.a *
+        visibleShadow;
+
+    Lo += CalculatePBRLight(
+        albedoColor,
+        N,
+        V,
+        directionalL,
+        directionalRadiance,
+        roughness,
+        metallic);
 
     int staticPointCount = 6;
     for (int staticIdx = 0; staticIdx < staticPointCount; ++staticIdx)
@@ -340,18 +437,26 @@ float4 LightPSMain(LightPassInput input) : SV_TARGET
         float3 toLight = PointLightPositionRange[staticIdx].xyz - worldPos;
         float dist = length(toLight);
         float range = max(PointLightPositionRange[staticIdx].w, 0.0001f);
+
         float falloff = saturate(1.0f - dist / range);
         float attenuation = falloff * falloff;
 
         float3 L = toLight / max(dist, 0.0001f);
-        float ndotl = saturate(dot(normal, L));
         float intensity = PointLightColorIntensity[staticIdx].a;
 
-        lit += PointLightColorIntensity[staticIdx].rgb *
-               ndotl *
-               attenuation *
-               intensity *
-               albedo.rgb;
+        float3 radiance =
+            PointLightColorIntensity[staticIdx].rgb *
+            intensity *
+            attenuation;
+
+        Lo += CalculatePBRLight(
+            albedoColor,
+            N,
+            V,
+            L,
+            radiance,
+            roughness,
+            metallic);
     }
 
     int dynamicCount = (int)LightCounts.z;
@@ -362,18 +467,26 @@ float4 LightPSMain(LightPassInput input) : SV_TARGET
         float3 toLight = PointLightPositionRange[idx].xyz - worldPos;
         float dist = length(toLight);
         float range = max(PointLightPositionRange[idx].w, 0.0001f);
+
         float falloff = saturate(1.0f - dist / range);
         float attenuation = falloff * falloff;
 
         float3 L = toLight / max(dist, 0.0001f);
-        float ndotl = saturate(dot(normal, L));
         float intensity = PointLightColorIntensity[idx].a;
 
-        lit += PointLightColorIntensity[idx].rgb *
-               ndotl *
-               attenuation *
-               intensity *
-               albedo.rgb;
+        float3 radiance =
+            PointLightColorIntensity[idx].rgb *
+            intensity *
+            attenuation;
+
+        Lo += CalculatePBRLight(
+            albedoColor,
+            N,
+            V,
+            L,
+            radiance,
+            roughness,
+            metallic);
     }
 
     int spotCount = (int)LightCounts.y;
@@ -382,6 +495,7 @@ float4 LightPSMain(LightPassInput input) : SV_TARGET
         float3 toLight = SpotLightPositionRange[spotIdx].xyz - worldPos;
         float dist = length(toLight);
         float range = max(SpotLightPositionRange[spotIdx].w, 0.0001f);
+
         float3 L = toLight / max(dist, 0.0001f);
 
         float falloff = saturate(1.0f - dist / range);
@@ -389,41 +503,77 @@ float4 LightPSMain(LightPassInput input) : SV_TARGET
 
         float3 spotDir = normalize(SpotLightDirectionCosine[spotIdx].xyz);
         float coneCos = SpotLightDirectionCosine[spotIdx].w;
+
         float spotAmount = saturate(
             (dot(-L, spotDir) - coneCos) / max(1.0f - coneCos, 0.0001f)
         );
 
         spotAmount = spotAmount * spotAmount * spotAmount;
 
-        float ndotl = saturate(dot(normal, L));
         float intensity = SpotLightColorIntensity[spotIdx].a;
 
-        lit += SpotLightColorIntensity[spotIdx].rgb *
-               ndotl *
-               attenuation *
-               spotAmount *
-               intensity *
-               albedo.rgb;
+        float3 radiance =
+            SpotLightColorIntensity[spotIdx].rgb *
+            intensity *
+            attenuation *
+            spotAmount;
+
+        Lo += CalculatePBRLight(
+            albedoColor,
+            N,
+            V,
+            L,
+            radiance,
+            roughness,
+            metallic);
     }
 
-    float3 shadowedLit = lit * lerp(0.01f, 1.0f, shadow);
+    float3 F0 = float3(0.04f, 0.04f, 0.04f);
+F0 = lerp(F0, albedoColor, metallic);
+
+float NdotV = max(dot(N, V), 0.0f);
+float3 F = FresnelSchlickRoughness(NdotV, F0, roughness);
+
+float3 kS = F;
+float3 kD = 1.0f - kS;
+kD *= 1.0f - metallic;
+
+float3 irradiance = IrradianceMap.Sample(gSampler, N).rgb;
+float3 diffuseIBL = irradiance * albedoColor;
+
+float3 R = reflect(-V, N);
+const float MAX_REFLECTION_LOD = 7.0f;
+
+float3 prefilteredColor = PrefilterMap.SampleLevel(
+    gSampler,
+    R,
+    roughness * MAX_REFLECTION_LOD
+).rgb;
+
+float2 brdf = BrdfLUT.Sample(
+    gSampler,
+    float2(NdotV, roughness)
+).rg;
+
+float3 specularIBL = prefilteredColor * (F * brdf.x + brdf.y);
+
+float3 ambient = (kD * diffuseIBL + specularIBL) * ao;
+float3 color = ambient + Lo;
 
     if (debugMode == 4)
     {
         float shadowMask = 1.0f - smoothstep(0.65f, 0.98f, shadow);
 
-        float checker = CheckerPattern(worldPos, normal);
+        float checker = CheckerPattern(worldPos, N);
 
         float3 checkerDark = float3(0.02f, 0.02f, 0.025f);
         float3 checkerLight = float3(0.85f, 0.85f, 0.85f);
         float3 checkerColor = lerp(checkerDark, checkerLight, checker);
 
-        float3 checkerLit = lerp(shadowedLit, checkerColor * albedo.rgb, shadowMask);
-
-        return float4(checkerLit, albedo.a);
+        color = lerp(color, checkerColor * albedoColor, shadowMask);
     }
 
-        return float4(shadowedLit, albedo.a);
+    return float4(color, 1.0);
 }
 
 // ========== ТЕССЕЛЯЦИЯ ==========
@@ -751,12 +901,16 @@ GBufferOutput TessGeometryPSMain(TessGeometryPSInput input)
     float3x3 TBN = float3x3(T, B, N);
     float3 finalNormal = normalize(mul(normalTS, TBN));
     
-    float depth = saturate(input.ViewDepth / 100.0f);
+    float depth = saturate(input.ViewDepth / 300.0f);
     
-    o.AlbedoSpec = albedo;
-    o.WorldPos = float4(input.WorldPos, 1.0f);
-    o.Normal = float4(finalNormal * 0.5f + 0.5f, 1.0f);
-    o.Depth = float4(depth, depth, depth, 1.0f);
+float roughness = 0.45f;
+float metallic = 0.0f;
+float ao = 1.0f;
+
+o.AlbedoSpec = float4(albedo.rgb, roughness);
+o.WorldPos = float4(input.WorldPos, 1.0f);
+o.Normal = float4(finalNormal * 0.5f + 0.5f, 1.0f);
+o.Depth = float4(depth, metallic, ao, 1.0f);
     
     return o;
 }
@@ -781,11 +935,16 @@ GBufferOutput WaterPSMain(WaterPSInput input)
     albedo.rgb += variation * 0.1f;
 
     float3 normal = normalize(input.NormalW);
+    float depth = saturate(input.ViewDepth / 300.0f);
     
-    o.AlbedoSpec = albedo;
-    o.WorldPos = float4(input.WorldPos, 1.0f);
-    o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
-    o.Depth = float4(saturate(input.ViewDepth / 100.0f), 0, 0, 1.0f);
+float roughness = 0.45f;
+float metallic = 0.0f;
+float ao = 1.0f;
+
+o.AlbedoSpec = float4(albedo.rgb, roughness);
+o.WorldPos = float4(input.WorldPos, 1.0f);
+o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
+o.Depth = float4(depth, metallic, ao, 1.0f);
     
     return o;
 }
@@ -1053,12 +1212,16 @@ GBufferOutput CubePSMain(CubePSInput input)
     float4 albedo = float4(0.0f, 0.0f, 1.0f, 1.0f);
     
     float3 normal = normalize(input.NormalW);
-    float depth = saturate(input.ViewDepth / 100.0f);
+    float depth = saturate(input.ViewDepth / 300.0f);
     
-    o.AlbedoSpec = albedo;
-    o.WorldPos = float4(input.WorldPos, 1.0f);
-    o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
-    o.Depth = float4(depth, depth, depth, 1.0f);
+float roughness = 0.45f;
+float metallic = 0.0f;
+float ao = 1.0f;
+
+o.AlbedoSpec = float4(albedo.rgb, roughness);
+o.WorldPos = float4(input.WorldPos, 1.0f);
+o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
+o.Depth = float4(depth, metallic, ao, 1.0f);
     
     return o;
 }
@@ -1117,12 +1280,16 @@ GBufferOutput CubePSInstanced(CubeVSInstancedOutput input) : SV_TARGET
     float4 albedo = input.Color;
     
     float3 normal = normalize(input.NormalW);
-    float depth = saturate(input.ViewDepth / 100.0f);
+    float depth = saturate(input.ViewDepth / 300.0f);
     
-    o.AlbedoSpec = albedo;
-    o.WorldPos = float4(input.WorldPos, 1.0f);
-    o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
-    o.Depth = float4(depth, depth, depth, 1.0f);
+float roughness = 0.45f;
+float metallic = 0.0f;
+float ao = 1.0f;
+
+o.AlbedoSpec = float4(albedo.rgb, roughness);
+o.WorldPos = float4(input.WorldPos, 1.0f);
+o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
+o.Depth = float4(depth, metallic, ao, 1.0f);
     
     return o;
 }
@@ -1179,12 +1346,16 @@ GBufferOutput CubePSInstanced(VSInstancedOutput input) : SV_TARGET
     float4 albedo = input.Color;
     
     float3 normal = normalize(input.NormalW);
-    float depth = saturate(input.ViewDepth / 100.0f);
+    float depth = saturate(input.ViewDepth / 300.0f);
     
-    o.AlbedoSpec = albedo;
-    o.WorldPos = float4(input.WorldPos, 1.0f);
-    o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
-    o.Depth = float4(depth, depth, depth, 1.0f);
+float roughness = 0.45f;
+float metallic = 0.0f;
+float ao = 1.0f;
+
+o.AlbedoSpec = float4(albedo.rgb, roughness);
+o.WorldPos = float4(input.WorldPos, 1.0f);
+o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
+o.Depth = float4(depth, metallic, ao, 1.0f);
     
     return o;
 }
@@ -1261,12 +1432,16 @@ GBufferOutput LOD1PSMain(LOD1VSOutput input)
     float4 albedo = input.Color;
     
     float3 normal = normalize(input.NormalW);
-    float depth = saturate(input.ViewDepth / 100.0f);
+    float depth = saturate(input.ViewDepth / 300.0f);
     
-    o.AlbedoSpec = albedo;
-    o.WorldPos = float4(input.WorldPos, 1.0f);
-    o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
-    o.Depth = float4(depth, depth, depth, 1.0f);
+float roughness = 0.45f;
+float metallic = 0.0f;
+float ao = 1.0f;
+
+o.AlbedoSpec = float4(albedo.rgb, roughness);
+o.WorldPos = float4(input.WorldPos, 1.0f);
+o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
+o.Depth = float4(depth, metallic, ao, 1.0f);
     
     return o;
 }
@@ -1302,13 +1477,17 @@ GBufferOutput LOD2PSMain(LOD2VSOutput input)
     GBufferOutput o;
     
     // Use distance-based color for LOD2
-    float depth = saturate(input.ViewDepth / 100.0f);
+    float depth = saturate(input.ViewDepth / 300.0f);
     float4 albedo = float4(depth, depth * 0.5f, 1.0f - depth, 1.0f);
     
-    o.AlbedoSpec = albedo;
-    o.WorldPos = float4(input.WorldPos, 1.0f);
-    o.Normal = float4(0.5f, 0.5f, 1.0f, 1.0f);
-    o.Depth = float4(depth, depth, depth, 1.0f);
+float roughness = 0.45f;
+float metallic = 0.0f;
+float ao = 1.0f;
+
+o.AlbedoSpec = float4(albedo.rgb, roughness);
+o.WorldPos = float4(input.WorldPos, 1.0f);
+o.Normal = float4(0.5f, 0.5f, 1.0f, 1.0f);
+o.Depth = float4(depth, metallic, ao, 1.0f);
     
     return o;
 }
@@ -1360,12 +1539,16 @@ GBufferOutput LOD1PSInstanced(LOD1VSInstancedOutput input)
     
     float4 albedo = input.Color;
     float3 normal = normalize(input.NormalW);
-    float depth = saturate(input.ViewDepth / 100.0f);
+    float depth = saturate(input.ViewDepth / 300.0f);
     
-    o.AlbedoSpec = albedo;
-    o.WorldPos = float4(input.WorldPos, 1.0f);
-    o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
-    o.Depth = float4(depth, depth, depth, 1.0f);
+float roughness = 0.45f;
+float metallic = 0.0f;
+float ao = 1.0f;
+
+o.AlbedoSpec = float4(albedo.rgb, roughness);
+o.WorldPos = float4(input.WorldPos, 1.0f);
+o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
+o.Depth = float4(depth, metallic, ao, 1.0f);
     
     return o;
 }
@@ -1408,13 +1591,18 @@ GBufferOutput LOD2PSInstanced(LOD2VSInstancedOutput input)
 {
     GBufferOutput o;
     
-    float depth = saturate(input.ViewDepth / 100.0f);
+    float depth = saturate(input.ViewDepth / 300.0f);
     float4 albedo = float4(depth, depth * 0.5f, 1.0f - depth, 1.0f);
     
     o.AlbedoSpec = albedo;
-    o.WorldPos = float4(input.WorldPos, 1.0f);
-    o.Normal = float4(0.5f, 0.5f, 1.0f, 1.0f);
-    o.Depth = float4(depth, depth, depth, 1.0f);
+float roughness = 0.45f;
+float metallic = 0.0f;
+float ao = 1.0f;
+
+o.AlbedoSpec = float4(albedo.rgb, roughness);
+o.WorldPos = float4(input.WorldPos, 1.0f);
+o.Normal = float4(0.5f, 0.5f, 1.0f, 1.0f);
+o.Depth = float4(depth, metallic, ao, 1.0f);
     
     return o;
 }

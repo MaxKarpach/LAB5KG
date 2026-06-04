@@ -4,6 +4,8 @@
 #include <memory>
 #include <DirectXMath.h>
 #include <functional>
+#include "DDSTextureLoader.h"
+#include "ResourceUploadBatch.h"
 using namespace DirectX;
 
 // Constructor / Destructor
@@ -360,7 +362,7 @@ void DirectXApp::CreateDeferredRootSignatures()
 {
     D3D12_DESCRIPTOR_RANGE srvRange = {};
     srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srvRange.NumDescriptors = 5; // t0-t3 = GBuffer, t4 = ShadowMap
+    srvRange.NumDescriptors = 9; // t0-t3 = GBuffer, t4 = ShadowMap, t5 = SceneColor, t6-t8 = IBL
     srvRange.BaseShaderRegister = 0;
     srvRange.RegisterSpace = 0;
     srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
@@ -379,26 +381,43 @@ void DirectXApp::CreateDeferredRootSignatures()
     rootParams[1].Descriptor.RegisterSpace = 0;
     rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
-    D3D12_STATIC_SAMPLER_DESC shadowSampler = {};
-    shadowSampler.Filter = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
-    shadowSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
-    shadowSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
-    shadowSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
-    shadowSampler.MipLODBias = 0.0f;
-    shadowSampler.MaxAnisotropy = 1;
-    shadowSampler.ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
-    shadowSampler.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
-    shadowSampler.MinLOD = 0.0f;
-    shadowSampler.MaxLOD = D3D12_FLOAT32_MAX;
-    shadowSampler.ShaderRegister = 1; // s1 = ShadowSampler
-    shadowSampler.RegisterSpace = 0;
-    shadowSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    D3D12_STATIC_SAMPLER_DESC samplers[2] = {};
+
+    // s0 = regular sampler for IBL / BRDF LUT
+    samplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    samplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[0].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[0].MipLODBias = 0.0f;
+    samplers[0].MaxAnisotropy = 1;
+    samplers[0].ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+    samplers[0].BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
+    samplers[0].MinLOD = 0.0f;
+    samplers[0].MaxLOD = D3D12_FLOAT32_MAX;
+    samplers[0].ShaderRegister = 0;
+    samplers[0].RegisterSpace = 0;
+    samplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    // s1 = comparison sampler for shadow map PCF
+    samplers[1].Filter = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+    samplers[1].AddressU = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    samplers[1].AddressV = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    samplers[1].AddressW = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    samplers[1].MipLODBias = 0.0f;
+    samplers[1].MaxAnisotropy = 1;
+    samplers[1].ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    samplers[1].BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+    samplers[1].MinLOD = 0.0f;
+    samplers[1].MaxLOD = D3D12_FLOAT32_MAX;
+    samplers[1].ShaderRegister = 1;
+    samplers[1].RegisterSpace = 0;
+    samplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_ROOT_SIGNATURE_DESC desc = {};
     desc.NumParameters = _countof(rootParams);
     desc.pParameters = rootParams;
-    desc.NumStaticSamplers = 1;
-    desc.pStaticSamplers = &shadowSampler;
+    desc.NumStaticSamplers = _countof(samplers);
+    desc.pStaticSamplers = samplers;
     desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
     ComPtr<ID3DBlob> serialized;
@@ -549,7 +568,7 @@ void DirectXApp::CreateDeferredPipelines()
     geomPsoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
     geomPsoDesc.RTVFormats[1] = DXGI_FORMAT_R16G16B16A16_FLOAT;
     geomPsoDesc.RTVFormats[2] = DXGI_FORMAT_R16G16B16A16_FLOAT;
-    geomPsoDesc.RTVFormats[3] = DXGI_FORMAT_R32_FLOAT;
+    geomPsoDesc.RTVFormats[3] = DXGI_FORMAT_R16G16B16A16_FLOAT;
     geomPsoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     geomPsoDesc.SampleDesc = { 1, 0 };
 
@@ -1706,6 +1725,7 @@ void DirectXApp::Resize(int newWidth, int newHeight)
     }
 
     CreateSceneColorTarget();
+    LoadIBLTextures();
 }
 
 void DirectXApp::FlushCommandQueue()
@@ -1775,6 +1795,9 @@ bool DirectXApp::Initialize()
         CreateShadowMap();
         CreateShadowPipeline();
 
+
+        LoadIBLTextures();
+
         CreateTessellationPipeline();
         CreateTessellationGeometryPipeline();
         CreateTessellationConstantBuffer();
@@ -1788,7 +1811,7 @@ bool DirectXApp::Initialize()
             std::wstring workingDir(exePath);
             workingDir = workingDir.substr(0, workingDir.find_last_of(L"\\/") + 1);
 
-            ObjResult modelData = LoadObj(workingDir + L"model.obj");
+            ObjResult modelData = LoadObj(workingDir + L"sponza.obj");
             if (modelData.valid)
             {
                 BuildMeshBuffers(modelData.vertices, modelData.indices);
@@ -1812,7 +1835,7 @@ bool DirectXApp::Initialize()
                 normalData = LoadTextureWIC(workingDir + L"normal.jpg");
             if (normalData.valid)
             {
-                UploadTexture(normalData, 1, true);
+                UploadTexture(normalData, 2, true);
                 m_useNormalMap = true;
             }
 
@@ -1821,7 +1844,7 @@ bool DirectXApp::Initialize()
                 displacementData = LoadTextureWIC(workingDir + L"displacement.jpg");
             if (displacementData.valid)
             {
-                UploadTexture(displacementData, 2, false);
+                UploadTexture(displacementData, 3, false);
                 m_useDisplacement = true;
             }
 
@@ -2052,7 +2075,7 @@ void DirectXApp::CreateCubePipelineState()
     psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
     psoDesc.RTVFormats[1] = DXGI_FORMAT_R16G16B16A16_FLOAT;
     psoDesc.RTVFormats[2] = DXGI_FORMAT_R16G16B16A16_FLOAT;
-    psoDesc.RTVFormats[3] = DXGI_FORMAT_R32_FLOAT;
+    psoDesc.RTVFormats[3] = DXGI_FORMAT_R16G16B16A16_FLOAT;
     psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     psoDesc.SampleDesc = { 1, 0 };
 
@@ -2298,7 +2321,7 @@ void DirectXApp::CreateTessellationGeometryPipeline()
     psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
     psoDesc.RTVFormats[1] = DXGI_FORMAT_R16G16B16A16_FLOAT;
     psoDesc.RTVFormats[2] = DXGI_FORMAT_R16G16B16A16_FLOAT;
-    psoDesc.RTVFormats[3] = DXGI_FORMAT_R32_FLOAT;
+    psoDesc.RTVFormats[3] = DXGI_FORMAT_R16G16B16A16_FLOAT;
     psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     psoDesc.SampleDesc = { 1, 0 };
 
@@ -2470,7 +2493,7 @@ void DirectXApp::CreateWaterPipelineState()
     psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
     psoDesc.RTVFormats[1] = DXGI_FORMAT_R16G16B16A16_FLOAT;
     psoDesc.RTVFormats[2] = DXGI_FORMAT_R16G16B16A16_FLOAT;
-    psoDesc.RTVFormats[3] = DXGI_FORMAT_R32_FLOAT;
+    psoDesc.RTVFormats[3] = DXGI_FORMAT_R16G16B16A16_FLOAT;
     psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     psoDesc.SampleDesc = { 1, 0 };
 
@@ -2566,7 +2589,7 @@ void DirectXApp::CreateWaterTessellationPipeline()
     psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
     psoDesc.RTVFormats[1] = DXGI_FORMAT_R16G16B16A16_FLOAT;
     psoDesc.RTVFormats[2] = DXGI_FORMAT_R16G16B16A16_FLOAT;
-    psoDesc.RTVFormats[3] = DXGI_FORMAT_R32_FLOAT;
+    psoDesc.RTVFormats[3] = DXGI_FORMAT_R16G16B16A16_FLOAT;
     psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     psoDesc.SampleDesc = { 1, 0 };
 
@@ -2895,7 +2918,7 @@ void DirectXApp::CreateInstancedPipeline()
         psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
         psoDesc.RTVFormats[1] = DXGI_FORMAT_R16G16B16A16_FLOAT;
         psoDesc.RTVFormats[2] = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        psoDesc.RTVFormats[3] = DXGI_FORMAT_R32_FLOAT;
+        psoDesc.RTVFormats[3] = DXGI_FORMAT_R16G16B16A16_FLOAT;
         psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
         psoDesc.SampleDesc = { 1, 0 };
 
@@ -2950,7 +2973,7 @@ void DirectXApp::CreateInstancedPipeline()
         psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
         psoDesc.RTVFormats[1] = DXGI_FORMAT_R16G16B16A16_FLOAT;
         psoDesc.RTVFormats[2] = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        psoDesc.RTVFormats[3] = DXGI_FORMAT_R32_FLOAT;
+        psoDesc.RTVFormats[3] = DXGI_FORMAT_R16G16B16A16_FLOAT;
         psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
         psoDesc.SampleDesc = { 1, 0 };
 
@@ -3002,7 +3025,7 @@ void DirectXApp::CreateInstancedPipeline()
         psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
         psoDesc.RTVFormats[1] = DXGI_FORMAT_R16G16B16A16_FLOAT;
         psoDesc.RTVFormats[2] = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        psoDesc.RTVFormats[3] = DXGI_FORMAT_R32_FLOAT;
+        psoDesc.RTVFormats[3] = DXGI_FORMAT_R16G16B16A16_FLOAT;
         psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
         psoDesc.SampleDesc = { 1, 0 };
 
@@ -4991,4 +5014,75 @@ void DirectXApp::RenderPostProcessPass()
 
     m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmdList->DrawInstanced(3, 1, 0, 0);
+}
+
+void DirectXApp::LoadIBLTextures()
+{
+    wchar_t exePath[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+
+    std::wstring dir(exePath);
+    dir = dir.substr(0, dir.find_last_of(L"\\/") + 1);
+
+    m_irradianceMap.Reset();
+    m_prefilteredEnvMap.Reset();
+    m_brdfIntegrationMap.Reset();
+
+    DirectX::ResourceUploadBatch upload(m_d3dDevice.Get());
+    upload.Begin();
+
+    ThrowIfFailed(DirectX::CreateDDSTextureFromFile(
+        m_d3dDevice.Get(),
+        upload,
+        (dir + L"IrradianceMap_BC6U.dds").c_str(),
+        m_irradianceMap.GetAddressOf()));
+
+    ThrowIfFailed(DirectX::CreateDDSTextureFromFile(
+        m_d3dDevice.Get(),
+        upload,
+        (dir + L"PreFilteredEnvMap_BC6U.dds").c_str(),
+        m_prefilteredEnvMap.GetAddressOf()));
+
+    ThrowIfFailed(DirectX::CreateDDSTextureFromFile(
+        m_d3dDevice.Get(),
+        upload,
+        (dir + L"IntegrationMap.dds").c_str(),
+        m_brdfIntegrationMap.GetAddressOf()));
+
+    auto finished = upload.End(m_cmdQueue.Get());
+    finished.wait();
+
+    auto createCubeSRV = [&](ID3D12Resource* resource, UINT slot)
+        {
+            auto desc = resource->GetDesc();
+
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Format = desc.Format;
+            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
+            srvDesc.TextureCube.MostDetailedMip = 0;
+            srvDesc.TextureCube.MipLevels = desc.MipLevels;
+            srvDesc.TextureCube.ResourceMinLODClamp = 0.0f;
+
+            m_gbuffer->CreateExternalSRV(slot, resource, srvDesc);
+        };
+
+    auto createTexture2DSRV = [&](ID3D12Resource* resource, UINT slot)
+        {
+            auto desc = resource->GetDesc();
+
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Format = desc.Format;
+            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            srvDesc.Texture2D.MostDetailedMip = 0;
+            srvDesc.Texture2D.MipLevels = desc.MipLevels;
+            srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+
+            m_gbuffer->CreateExternalSRV(slot, resource, srvDesc);
+        };
+
+    createCubeSRV(m_irradianceMap.Get(), 6);
+    createCubeSRV(m_prefilteredEnvMap.Get(), 7);
+    createTexture2DSRV(m_brdfIntegrationMap.Get(), 8);
 }
