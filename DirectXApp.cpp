@@ -1102,7 +1102,7 @@ void DirectXApp::UpdateLightingConstants()
 
     cb.DebugParams = DirectX::XMFLOAT4(
         static_cast<float>(static_cast<int>(m_shadowDebugMode)),
-        0.0f,
+        m_currentNDFMode,
         0.0f,
         0.0f
     );
@@ -1219,6 +1219,18 @@ void DirectXApp::Update(float deltaTime)
             SetWindowTextW(m_windowHandle, status);
         }
         m_prevGKey = m_inputDevice->IsKeyDown('G');
+
+        // Переключение NDF режима (N key)
+        if (m_inputDevice && m_inputDevice->IsKeyDown('N') && !m_prevNKey)
+        {
+            m_currentNDFMode = (m_currentNDFMode > 0.5f) ? 0.0f : 1.0f;
+
+            const wchar_t* modeName = (m_currentNDFMode < 0.5f) ? L"GGX" : L"Beckmann";
+            wchar_t title[256];
+            swprintf_s(title, L"NDF Mode: %s | Shadow: %d", modeName, (int)m_shadowDebugMode);
+            SetWindowTextW(m_windowHandle, title);
+        }
+        m_prevNKey = m_inputDevice->IsKeyDown('N');
     }
 
 

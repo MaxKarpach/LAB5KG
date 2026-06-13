@@ -296,6 +296,29 @@ float DistributionGGX(float3 N, float3 H, float roughness)
     return a2 / max(PI * denom * denom, 0.0001f);
 }
 
+float DistributionBeckmann(float3 N, float3 H, float roughness)
+{
+    float a = max(roughness * roughness, 0.001f);
+    float a2 = a * a;
+    float NdotH = max(dot(N, H), 0.0001f);
+    
+    float NdotH2 = NdotH * NdotH;
+    float NdotH4 = NdotH2 * NdotH2;
+    
+    float numerator = exp((NdotH2 - 1.0f) / (a2 * NdotH2));
+    float denominator = PI * a2 * NdotH4;
+    
+    return numerator / max(denominator, 0.0001f);
+}
+
+float Distribution(float3 N, float3 H, float roughness, float mode)
+{
+    if (mode < 0.5f)
+        return DistributionGGX(N, H, roughness);
+    else
+        return DistributionBeckmann(N, H, roughness);
+}
+
 float GeometrySchlickGGX(float NdotV, float roughness)
 {
     float r = roughness + 1.0f;
@@ -343,7 +366,7 @@ float3 CalculatePBRLight(
     float3 F0 = float3(0.04f, 0.04f, 0.04f);
     F0 = lerp(F0, albedo, metallic);
 
-    float D = DistributionGGX(N, H, roughness);
+    float D = Distribution(N, H, roughness, DebugParams.y);
     float G = GeometrySmith(N, V, L, roughness);
     float3 F = FresnelSchlick(max(dot(H, V), 0.0f), F0);
 
