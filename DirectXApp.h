@@ -686,4 +686,6 @@ private:
     ComPtr<ID3D12Resource> m_brdfIntegrationMap;
 
     void LoadIBLTextures();
+    float m_currentNDFMode = 0.0f; // 0 = GGX, 1 = Beckmann
+    bool m_prevNKey = false;
 };
