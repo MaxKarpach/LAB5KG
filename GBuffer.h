@@ -11,6 +11,11 @@ class GBuffer
 public:
     static constexpr UINT TargetCount = 4;
 
+    void CreateExternalSRV(
+        UINT slot,
+        ID3D12Resource* resource,
+        const D3D12_SHADER_RESOURCE_VIEW_DESC& srvDesc);
+
     enum class Slot : UINT
     {
         AlbedoSpec = 0,
