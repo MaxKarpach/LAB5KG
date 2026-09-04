@@ -1,7 +1,8 @@
 #pragma once
 #include <Windows.h>
-#include <stdexcept>
+#include <stdexcept>  // ← ЭТОГО НЕ ХВАТАЛО!
 #include <string>
+#include <cstdio>     // для sprintf_s
 
 inline void ThrowIfFailed(HRESULT hr, const char* msg = "")
 {

@@ -31,14 +31,8 @@ cbuffer DeferredLightCB : register(b1)
     float4 SpotLightDirectionCosine[4];
     float4 SpotLightColorIntensity[4];
     float4 ScreenSize;
-    float4 CameraPosition;
     float4x4 InvView;
     float4x4 InvProj;
-
-float4x4 LightViewProj[4];
-float4 CascadeSplits;
-float4 ShadowParams; // x = bias, y = shadow map size, z = cascade count
-float4 DebugParams; // x = shadow debug mode
 };
 
 cbuffer WaterCB : register(b3)
@@ -50,93 +44,14 @@ cbuffer WaterCB : register(b3)
     float Padding[4];
 };
 
-cbuffer PostProcessCB : register(b4)
-{
-    float4 PostScreenSize;
-    float4 PostParams0;
-    float4 PostParams1;
-};
-
 Texture2D gMainTexture : register(t0);
-Texture2D gNormalMap : register(t1);
-Texture2D gDisplacementMap : register(t2);
+Texture2D gNormalMap : register(t1); // НОВО: карта нормалей
+Texture2D gDisplacementMap : register(t2); // НОВО: карта смещения
+SamplerState gSampler : register(s0);
 Texture2D<float4> GAlbedoSpec : register(t0);
 Texture2D<float4> GWorldPos : register(t1);
 Texture2D<float4> GNormal : register(t2);
 Texture2D<float4> GDepth : register(t3);
-Texture2DArray<float> ShadowMap : register(t4);
-Texture2D<float4> SceneColor : register(t5);
-TextureCube<float4> IrradianceMap : register(t6);
-TextureCube<float4> PrefilterMap : register(t7);
-Texture2D<float2> BrdfLUT : register(t8);
-
-SamplerState gSampler : register(s0);
-SamplerComparisonState ShadowSampler : register(s1);
-
-struct ShadowVSInput
-{
-    float3 Position : POSITION;
-    float3 Normal : NORMAL;
-    float4 Color : COLOR;
-    float2 TexCoord : TEXCOORD;
-    float3 Tangent : TANGENT;
-    float3 Binormal : BINORMAL;
-};
-
-float4 ShadowVSMain(ShadowVSInput input) : SV_POSITION
-{
-    float4 worldPos = mul(float4(input.Position, 1.0f), World);
-    float4 viewPos = mul(worldPos, View);
-    return mul(viewPos, Proj);
-}
-
-int GetCascadeIndex(float viewDepth)
-{
-    if (viewDepth < CascadeSplits.x)
-        return 0;
-
-    if (viewDepth < CascadeSplits.y)
-        return 1;
-
-    if (viewDepth < CascadeSplits.z)
-        return 2;
-
-    return 3;
-}
-
-float GetShadowPCF(float3 worldPos, int cascadeIndex)
-{
-    float4 lightPos = mul(float4(worldPos, 1.0f), LightViewProj[cascadeIndex]);
-    lightPos.xyz /= lightPos.w;
-
-    float2 uv = lightPos.xy * float2(0.5f, -0.5f) + 0.5f;
-
-    if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f)
-        return 1.0f;
-
-    if (lightPos.z < 0.0f || lightPos.z > 1.0f)
-        return 1.0f;
-
-    float depth = lightPos.z - ShadowParams.x;
-    float texelSize = 1.0f / ShadowParams.y;
-
-    float result = 0.0f;
-
-    [unroll]
-    for (int y = -1; y <= 1; ++y)
-    {
-        [unroll]
-        for (int x = -1; x <= 1; ++x)
-        {
-            result += ShadowMap.SampleCmpLevelZero(
-                ShadowSampler,
-                float3(uv + float2(x, y) * texelSize, cascadeIndex),
-                depth);
-        }
-    }
-
-    return result / 9.0f;
-}
 
 struct VSInput
 {
@@ -238,82 +153,13 @@ GBufferOutput GeometryPSMain(GeometryPSInput input)
     float4 albedo = gMainTexture.Sample(gSampler, input.UV);
     
     float3 normal = normalize(input.NormalW);
-    float depth = saturate(input.ViewDepth / 300.0f);
+    float depth = saturate(input.ViewDepth / 100.0f);
     
-float roughness = 0.45f;
-float metallic = 0.0f;
-float ao = 1.0f;
-
-o.AlbedoSpec = float4(albedo.rgb, roughness);
-o.WorldPos = float4(input.WorldPos, 1.0f);
-o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
-o.Depth = float4(depth, metallic, ao, 1.0f);
-    
-    return o;
-}
-
-struct TerrainVSInput
-{
-    float3 Position : POSITION;
-    float3 Normal   : NORMAL;
-    float4 Color    : COLOR;
-    float2 TexCoord : TEXCOORD;
-    float3 Tangent  : TANGENT;
-    float3 Binormal : BINORMAL;
-};
-
-struct TerrainPSInput
-{
-    float4 PosH      : SV_POSITION;
-    float3 WorldPos  : TEXCOORD0;
-    float3 NormalW   : TEXCOORD1;
-    float2 UV        : TEXCOORD2;
-    float ViewDepth  : TEXCOORD3;
-    float4 Color     : COLOR;
-};
-
-TerrainPSInput TerrainVSMain(TerrainVSInput input)
-{
-    TerrainPSInput o;
-
-    float4 worldPos = float4(input.Position, 1.0f);
-    float4 viewPos = mul(worldPos, View);
-
-    o.PosH = mul(viewPos, Proj);
-    o.WorldPos = worldPos.xyz;
-    o.NormalW = normalize(input.Normal);
-    o.UV = input.TexCoord;
-    o.ViewDepth = viewPos.z;
-    o.Color = input.Color;
-
-    return o;
-}
-
-GBufferOutput TerrainPSMain(TerrainPSInput input)
-{
-    GBufferOutput o;
-
-    float height01 = saturate(input.WorldPos.y / 80.0f);
-
-    float3 grass = float3(0.18f, 0.42f, 0.14f);
-    float3 rock  = float3(0.42f, 0.39f, 0.34f);
-    float3 snow  = float3(0.80f, 0.82f, 0.78f);
-
-    float slope = 1.0f - saturate(input.NormalW.y);
-
-    float3 color = lerp(grass, rock, saturate(height01 * 1.2f + slope * 0.8f));
-    color = lerp(color, snow, smoothstep(0.78f, 1.0f, height01));
-
-    float depth = saturate(input.ViewDepth / 900.0f);
-    float roughness = 0.85f;
-    float metallic = 0.0f;
-    float ao = 1.0f;
-
-    o.AlbedoSpec = float4(color, roughness);
+    o.AlbedoSpec = albedo;
     o.WorldPos = float4(input.WorldPos, 1.0f);
-    o.Normal = float4(normalize(input.NormalW) * 0.5f + 0.5f, 1.0f);
-    o.Depth = float4(depth, metallic, ao, 1.0f);
-
+    o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
+    o.Depth = float4(depth, depth, depth, 1.0f);
+    
     return o;
 }
 
@@ -330,338 +176,83 @@ LightPassInput LightVSMain(uint vertexId : SV_VertexID)
     return output;
 }
 
-float CheckerPattern(float3 worldPos, float3 normal)
-{
-    float3 absN = abs(normal);
-    float2 uv;
-
-    // Выбираем плоскость проекции по направлению нормали
-    if (absN.y >= absN.x && absN.y >= absN.z)
-        uv = worldPos.xz; // пол / потолок
-    else if (absN.x >= absN.y && absN.x >= absN.z)
-        uv = worldPos.zy; // стены по X
-    else
-        uv = worldPos.xy; // стены по Z
-
-    float scale = 1.5f;
-    int2 cell = (int2)floor(uv * scale);
-
-    return ((cell.x + cell.y) & 1) ? 1.0f : 0.0f;
-}
-
-static const float PI = 3.14159265359f;
-
-float DistributionGGX(float3 N, float3 H, float roughness)
-{
-    float a = roughness * roughness;
-    float a2 = a * a;
-    float NdotH = max(dot(N, H), 0.0f);
-    float denom = NdotH * NdotH * (a2 - 1.0f) + 1.0f;
-
-    return a2 / max(PI * denom * denom, 0.0001f);
-}
-
-float DistributionBeckmann(float3 N, float3 H, float roughness)
-{
-    float a = roughness * roughness;
-    float a2 = a * a;
-    float NdotH = max(dot(N, H), 0.0001f);
-    
-    float NdotH2 = NdotH * NdotH;
-    float NdotH4 = NdotH2 * NdotH2;
-    
-    float numerator = exp((NdotH2 - 1.0f) / (a2 * NdotH2));
-    float denominator = PI * a2 * NdotH4;
-    
-    return numerator / max(denominator, 0.0001f);
-}
-
-float Distribution(float3 N, float3 H, float roughness, float mode)
-{
-    if (mode < 0.5f)
-        return DistributionGGX(N, H, roughness);
-    else
-        return DistributionBeckmann(N, H, roughness);
-}
-
-float GeometrySchlickGGX(float NdotV, float roughness)
-{
-    float r = roughness + 1.0f;
-    float k = (r * r) / 8.0f;
-
-    return NdotV / max(NdotV * (1.0f - k) + k, 0.0001f);
-}
-
-float GeometrySmith(float3 N, float3 V, float3 L, float roughness)
-{
-    float NdotV = max(dot(N, V), 0.0f);
-    float NdotL = max(dot(N, L), 0.0f);
-
-    float ggxV = GeometrySchlickGGX(NdotV, roughness);
-    float ggxL = GeometrySchlickGGX(NdotL, roughness);
-
-    return ggxV * ggxL;
-}
-
-float3 FresnelSchlick(float cosTheta, float3 F0)
-{
-    return F0 + (1.0f - F0) * pow(saturate(1.0f - cosTheta), 5.0f);
-}
-
-float3 FresnelSchlickRoughness(float cosTheta, float3 F0, float roughness)
-{
-    return F0 + (max(float3(1.0f - roughness, 1.0f - roughness, 1.0f - roughness), F0) - F0) *
-        pow(saturate(1.0f - cosTheta), 5.0f);
-}
-
-float3 CalculatePBRLight(
-    float3 albedo,
-    float3 N,
-    float3 V,
-    float3 L,
-    float3 radiance,
-    float roughness,
-    float metallic)
-{
-    float3 H = normalize(V + L);
-
-    float NdotL = max(dot(N, L), 0.0f);
-    float NdotV = max(dot(N, V), 0.0f);
-
-    float3 F0 = float3(0.04f, 0.04f, 0.04f);
-    F0 = lerp(F0, albedo, metallic);
-
-    float D = Distribution(N, H, roughness, DebugParams.y);
-    float G = GeometrySmith(N, V, L, roughness);
-    float3 F = FresnelSchlick(max(dot(H, V), 0.0f), F0);
-
-    float3 numerator = D * G * F;
-    float denominator = max(4.0f * NdotV * NdotL, 0.0001f);
-    float3 specular = numerator / denominator;
-
-    float3 kS = F;
-    float3 kD = 1.0f - kS;
-    kD *= 1.0f - metallic;
-
-    float3 diffuse = kD * albedo / PI;
-
-    return (diffuse + specular) * radiance * NdotL;
-}
-
 float4 LightPSMain(LightPassInput input) : SV_TARGET
 {
     int2 pixelPos = int2(input.Position.xy);
-
-float4 albedoRoughness = GAlbedoSpec.Load(int3(pixelPos, 0));
-float3 worldPos = GWorldPos.Load(int3(pixelPos, 0)).xyz;
-float3 normalEncoded = GNormal.Load(int3(pixelPos, 0)).xyz;
-float4 depthMaterial = GDepth.Load(int3(pixelPos, 0));
-
-float depth = depthMaterial.x;
-
-if (depthMaterial.a < 0.5f)
-    return float4(0.0f, 0.0f, 0.0f, 1.0f);
-
-    float3 albedoColor = albedoRoughness.rgb;
-    float3 N = normalize(normalEncoded * 2.0f - 1.0f);
-    float3 V = normalize(CameraPosition.xyz - worldPos);
-
-float roughness = saturate(albedoRoughness.a);
-float metallic = saturate(depthMaterial.y);
-float ao = saturate(depthMaterial.z);
-
-float viewDepthForCascade = depth * 300.0f;
-    int cascadeIndex = GetCascadeIndex(viewDepthForCascade);
-    float shadow = GetShadowPCF(worldPos, cascadeIndex);
-
-    int debugMode = (int)DebugParams.x;
-
-    if (debugMode == 1)
-    {
-        return float4(shadow, shadow, shadow, 1.0f);
-    }
-
-    if (debugMode == 2)
-    {
-        shadow = 1.0f;
-    }
-
-    if (debugMode == 3)
-    {
-        if (cascadeIndex == 0)
-            return float4(1.0f, 0.0f, 0.0f, 1.0f);
-
-        if (cascadeIndex == 1)
-            return float4(0.0f, 1.0f, 0.0f, 1.0f);
-
-        if (cascadeIndex == 2)
-            return float4(0.0f, 0.0f, 1.0f, 1.0f);
-
-        return float4(1.0f, 1.0f, 0.0f, 1.0f);
-    }
-
-    float3 Lo = float3(0.0f, 0.0f, 0.0f);
-
-    float visibleShadow = lerp(0.25f, 1.0f, shadow);
-
+    
+    float4 albedo = GAlbedoSpec.Load(int3(pixelPos, 0));
+    float3 worldPos = GWorldPos.Load(int3(pixelPos, 0)).xyz;
+    float3 normalEncoded = GNormal.Load(int3(pixelPos, 0)).xyz;
+    float depth = GDepth.Load(int3(pixelPos, 0)).x;
+    
+    if (depth >= 1.0f)
+        return float4(0.0f, 0.0f, 0.0f, 1.0f);
+    
+    float3 normal = normalize(normalEncoded * 2.0f - 1.0f);
+    float3 lit = AmbientColor.rgb * albedo.rgb;
+    
+    // Directional light
     float3 directionalL = normalize(-DirectionalLightDirection.xyz);
-    float3 directionalRadiance =
-        DirectionalLightColor.rgb *
-        DirectionalLightColor.a *
-        visibleShadow;
-
-    Lo += CalculatePBRLight(
-        albedoColor,
-        N,
-        V,
-        directionalL,
-        directionalRadiance,
-        roughness,
-        metallic);
-
+    float directionalNdotL = saturate(dot(normal, directionalL));
+    lit += DirectionalLightColor.rgb * directionalNdotL * albedo.rgb * DirectionalLightColor.a;
+    
+    // Static point lights - используем staticIdx вместо i
     int staticPointCount = 6;
     for (int staticIdx = 0; staticIdx < staticPointCount; ++staticIdx)
     {
         float3 toLight = PointLightPositionRange[staticIdx].xyz - worldPos;
         float dist = length(toLight);
         float range = max(PointLightPositionRange[staticIdx].w, 0.0001f);
-
         float falloff = saturate(1.0f - dist / range);
         float attenuation = falloff * falloff;
-
+        
         float3 L = toLight / max(dist, 0.0001f);
+        float ndotl = saturate(dot(normal, L));
         float intensity = PointLightColorIntensity[staticIdx].a;
-
-        float3 radiance =
-            PointLightColorIntensity[staticIdx].rgb *
-            intensity *
-            attenuation;
-
-        Lo += CalculatePBRLight(
-            albedoColor,
-            N,
-            V,
-            L,
-            radiance,
-            roughness,
-            metallic);
+        lit += PointLightColorIntensity[staticIdx].rgb * ndotl * attenuation * intensity * albedo.rgb;
     }
-
-    int dynamicCount = (int)LightCounts.z;
+    
+    // Dynamic lights - используем dynamicIdx вместо i
+    int dynamicCount = (int) LightCounts.z;
     for (int dynamicIdx = 0; dynamicIdx < dynamicCount; ++dynamicIdx)
     {
         int idx = staticPointCount + dynamicIdx;
-
         float3 toLight = PointLightPositionRange[idx].xyz - worldPos;
         float dist = length(toLight);
         float range = max(PointLightPositionRange[idx].w, 0.0001f);
-
         float falloff = saturate(1.0f - dist / range);
         float attenuation = falloff * falloff;
-
+        
         float3 L = toLight / max(dist, 0.0001f);
+        float ndotl = saturate(dot(normal, L));
         float intensity = PointLightColorIntensity[idx].a;
-
-        float3 radiance =
-            PointLightColorIntensity[idx].rgb *
-            intensity *
-            attenuation;
-
-        Lo += CalculatePBRLight(
-            albedoColor,
-            N,
-            V,
-            L,
-            radiance,
-            roughness,
-            metallic);
+        lit += PointLightColorIntensity[idx].rgb * ndotl * attenuation * intensity * albedo.rgb;
     }
-
-    int spotCount = (int)LightCounts.y;
+    
+    // Spot lights - используем spotIdx вместо i
+    int spotCount = (int) LightCounts.y;
     for (int spotIdx = 0; spotIdx < spotCount; ++spotIdx)
     {
         float3 toLight = SpotLightPositionRange[spotIdx].xyz - worldPos;
         float dist = length(toLight);
         float range = max(SpotLightPositionRange[spotIdx].w, 0.0001f);
-
         float3 L = toLight / max(dist, 0.0001f);
-
+        
         float falloff = saturate(1.0f - dist / range);
         float attenuation = falloff * falloff;
-
+        
         float3 spotDir = normalize(SpotLightDirectionCosine[spotIdx].xyz);
         float coneCos = SpotLightDirectionCosine[spotIdx].w;
-
-        float spotAmount = saturate(
-            (dot(-L, spotDir) - coneCos) / max(1.0f - coneCos, 0.0001f)
-        );
-
+        float spotAmount = saturate((dot(-L, spotDir) - coneCos) / max(1.0f - coneCos, 0.0001f));
         spotAmount = spotAmount * spotAmount * spotAmount;
-
+        
+        float ndotl = saturate(dot(normal, L));
         float intensity = SpotLightColorIntensity[spotIdx].a;
-
-        float3 radiance =
-            SpotLightColorIntensity[spotIdx].rgb *
-            intensity *
-            attenuation *
-            spotAmount;
-
-        Lo += CalculatePBRLight(
-            albedoColor,
-            N,
-            V,
-            L,
-            radiance,
-            roughness,
-            metallic);
+        lit += SpotLightColorIntensity[spotIdx].rgb * ndotl * attenuation * spotAmount * intensity * albedo.rgb;
     }
-
-    float3 F0 = float3(0.04f, 0.04f, 0.04f);
-F0 = lerp(F0, albedoColor, metallic);
-
-float NdotV = max(dot(N, V), 0.0f);
-float3 F = FresnelSchlickRoughness(NdotV, F0, roughness);
-
-float3 kS = F;
-float3 kD = 1.0f - kS;
-kD *= 1.0f - metallic;
-
-float3 irradiance = IrradianceMap.Sample(gSampler, N).rgb;
-float3 diffuseIBL = irradiance * albedoColor;
-
-float3 R = reflect(-V, N);
-const float MAX_REFLECTION_LOD = 7.0f;
-
-float3 prefilteredColor = PrefilterMap.SampleLevel(
-    gSampler,
-    R,
-    roughness * MAX_REFLECTION_LOD
-).rgb;
-
-float2 brdf = BrdfLUT.Sample(
-    gSampler,
-    float2(NdotV, roughness)
-).rg;
-
-float3 specularIBL = prefilteredColor * (F * brdf.x + brdf.y);
-
-float3 ambient = (kD * diffuseIBL + specularIBL) * ao;
-float3 color = ambient + Lo;
-
-    if (debugMode == 4)
-    {
-        float shadowMask = 1.0f - smoothstep(0.65f, 0.98f, shadow);
-
-        float checker = CheckerPattern(worldPos, N);
-
-        float3 checkerDark = float3(0.02f, 0.02f, 0.025f);
-        float3 checkerLight = float3(0.85f, 0.85f, 0.85f);
-        float3 checkerColor = lerp(checkerDark, checkerLight, checker);
-
-        color = lerp(color, checkerColor * albedoColor, shadowMask);
-    }
-
-    return float4(color, 1.0);
+    
+    float3 litSRGB = pow(saturate(lit), 1.0f / 2.2f);
+    return float4(litSRGB, albedo.a);
 }
 
 // ========== ТЕССЕЛЯЦИЯ ==========
@@ -973,8 +564,12 @@ GBufferOutput TessGeometryPSMain(TessGeometryPSInput input)
     
     float4 albedo = gMainTexture.Sample(gSampler, input.UV);
     
+    // ===== ВИЗУАЛИЗАЦИЯ HEIGHT =====
+    float height = gDisplacementMap.Sample(gSampler, input.UV).r;
+    
     // Временная визуализация: показываем height вместо albedo
-
+    // Черный = 0, Белый = 1, Серый = 0.5
+    albedo = float4(height, height, height, 1.0f);
     // ================================
     
     // ДОБАВИТЬ: normal mapping для deferred
@@ -989,16 +584,12 @@ GBufferOutput TessGeometryPSMain(TessGeometryPSInput input)
     float3x3 TBN = float3x3(T, B, N);
     float3 finalNormal = normalize(mul(normalTS, TBN));
     
-    float depth = saturate(input.ViewDepth / 300.0f);
+    float depth = saturate(input.ViewDepth / 100.0f);
     
-float roughness = 0.45f;
-float metallic = 0.0f;
-float ao = 1.0f;
-
-o.AlbedoSpec = float4(albedo.rgb, roughness);
-o.WorldPos = float4(input.WorldPos, 1.0f);
-o.Normal = float4(finalNormal * 0.5f + 0.5f, 1.0f);
-o.Depth = float4(depth, metallic, ao, 1.0f);
+    o.AlbedoSpec = albedo;
+    o.WorldPos = float4(input.WorldPos, 1.0f);
+    o.Normal = float4(finalNormal * 0.5f + 0.5f, 1.0f);
+    o.Depth = float4(depth, depth, depth, 1.0f);
     
     return o;
 }
@@ -1023,16 +614,11 @@ GBufferOutput WaterPSMain(WaterPSInput input)
     albedo.rgb += variation * 0.1f;
 
     float3 normal = normalize(input.NormalW);
-    float depth = saturate(input.ViewDepth / 300.0f);
     
-float roughness = 0.45f;
-float metallic = 0.0f;
-float ao = 1.0f;
-
-o.AlbedoSpec = float4(albedo.rgb, roughness);
-o.WorldPos = float4(input.WorldPos, 1.0f);
-o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
-o.Depth = float4(depth, metallic, ao, 1.0f);
+    o.AlbedoSpec = albedo;
+    o.WorldPos = float4(input.WorldPos, 1.0f);
+    o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
+    o.Depth = float4(saturate(input.ViewDepth / 100.0f), 0, 0, 1.0f);
     
     return o;
 }
@@ -1300,16 +886,12 @@ GBufferOutput CubePSMain(CubePSInput input)
     float4 albedo = float4(0.0f, 0.0f, 1.0f, 1.0f);
     
     float3 normal = normalize(input.NormalW);
-    float depth = saturate(input.ViewDepth / 300.0f);
+    float depth = saturate(input.ViewDepth / 100.0f);
     
-float roughness = 0.45f;
-float metallic = 0.0f;
-float ao = 1.0f;
-
-o.AlbedoSpec = float4(albedo.rgb, roughness);
-o.WorldPos = float4(input.WorldPos, 1.0f);
-o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
-o.Depth = float4(depth, metallic, ao, 1.0f);
+    o.AlbedoSpec = albedo;
+    o.WorldPos = float4(input.WorldPos, 1.0f);
+    o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
+    o.Depth = float4(depth, depth, depth, 1.0f);
     
     return o;
 }
@@ -1368,16 +950,12 @@ GBufferOutput CubePSInstanced(CubeVSInstancedOutput input) : SV_TARGET
     float4 albedo = input.Color;
     
     float3 normal = normalize(input.NormalW);
-    float depth = saturate(input.ViewDepth / 300.0f);
+    float depth = saturate(input.ViewDepth / 100.0f);
     
-float roughness = 0.45f;
-float metallic = 0.0f;
-float ao = 1.0f;
-
-o.AlbedoSpec = float4(albedo.rgb, roughness);
-o.WorldPos = float4(input.WorldPos, 1.0f);
-o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
-o.Depth = float4(depth, metallic, ao, 1.0f);
+    o.AlbedoSpec = albedo;
+    o.WorldPos = float4(input.WorldPos, 1.0f);
+    o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
+    o.Depth = float4(depth, depth, depth, 1.0f);
     
     return o;
 }
@@ -1406,7 +984,6 @@ struct VSInstancedOutput
     float2 UV : TEXCOORD2;
     float ViewDepth : TEXCOORD3;
     float4 Color : COLOR;
-    float Metallic: TEXCOORD4;
 };
 
 VSInstancedOutput CubeVSInstanced(VSInstancedInput input)
@@ -1424,7 +1001,6 @@ VSInstancedOutput CubeVSInstanced(VSInstancedInput input)
     output.UV = input.TexCoord;
     output.ViewDepth = viewPos.z;
     output.Color = float4(input.InstanceColor, 1.0f);
-    output.Metallic = input.InstancePadding;
     
     return output;
 }
@@ -1436,833 +1012,12 @@ GBufferOutput CubePSInstanced(VSInstancedOutput input) : SV_TARGET
     float4 albedo = input.Color;
     
     float3 normal = normalize(input.NormalW);
-    float depth = saturate(input.ViewDepth / 300.0f);
-    
-float metallic = saturate(input.Metallic);
-
-float roughness = saturate((input.WorldPos.z + 50.0f) / 100.0f);
-roughness = max(roughness, 0.04f);
-
-float ao = 1.0f;
-
-o.AlbedoSpec = float4(albedo.rgb, roughness);
-o.WorldPos = float4(input.WorldPos, 1.0f);
-o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
-o.Depth = float4(depth, metallic, ao, 1.0f);
-    
-    return o;
-}
-
-struct LineVSInput
-{
-    float3 Position : POSITION;
-    float4 Color : COLOR;
-};
-
-struct LinePSInput
-{
-    float4 Position : SV_POSITION;
-    float4 Color : COLOR;
-};
-
-cbuffer LineCB : register(b0)
-{
-    float4x4 ViewProj;
-};
-
-LinePSInput LineVS(LineVSInput input)
-{
-    LinePSInput output;
-    output.Position = mul(float4(input.Position, 1.0f), ViewProj);
-    output.Color = input.Color;
-    return output;
-}
-
-float4 LinePS(LinePSInput input) : SV_TARGET
-{
-    return input.Color;
-}
-
-// ========== LOD1 MESH (Simplified - no tangents) ==========
-struct LOD1VSInput
-{
-    float3 Position : POSITION;
-    float3 Normal : NORMAL;
-    float4 Color : COLOR;
-    float2 TexCoord : TEXCOORD;
-};
-
-struct LOD1VSOutput
-{
-    float4 PosH : SV_POSITION;
-    float3 WorldPos : TEXCOORD0;
-    float3 NormalW : TEXCOORD1;
-    float2 UV : TEXCOORD2;
-    float ViewDepth : TEXCOORD3;
-    float4 Color : COLOR;
-};
-
-LOD1VSOutput LOD1VSMain(LOD1VSInput input)
-{
-    LOD1VSOutput output;
-    
-    float4 worldPos = mul(float4(input.Position, 1.0f), World);
-    float4 viewPos = mul(worldPos, View);
-    output.PosH = mul(viewPos, Proj);
-    output.WorldPos = worldPos.xyz;
-    output.NormalW = normalize(mul(float4(input.Normal, 0.0f), World).xyz);
-    output.UV = input.TexCoord;
-    output.ViewDepth = viewPos.z;
-    output.Color = input.Color;
-    
-    return output;
-}
-
-GBufferOutput LOD1PSMain(LOD1VSOutput input)
-{
-    GBufferOutput o;
-    
-    float4 albedo = input.Color;
-    
-    float3 normal = normalize(input.NormalW);
-    float depth = saturate(input.ViewDepth / 300.0f);
-    
-float roughness = 0.45f;
-float metallic = 0.0f;
-float ao = 1.0f;
-
-o.AlbedoSpec = float4(albedo.rgb, roughness);
-o.WorldPos = float4(input.WorldPos, 1.0f);
-o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
-o.Depth = float4(depth, metallic, ao, 1.0f);
-    
-    return o;
-}
-
-// ========== LOD2 MESH (Position only) ==========
-struct LOD2VSInput
-{
-    float3 Position : POSITION;
-};
-
-struct LOD2VSOutput
-{
-    float4 PosH : SV_POSITION;
-    float3 WorldPos : TEXCOORD0;
-    float ViewDepth : TEXCOORD3;
-};
-
-LOD2VSOutput LOD2VSMain(LOD2VSInput input)
-{
-    LOD2VSOutput output;
-    
-    float4 worldPos = mul(float4(input.Position, 1.0f), World);
-    float4 viewPos = mul(worldPos, View);
-    output.PosH = mul(viewPos, Proj);
-    output.WorldPos = worldPos.xyz;
-    output.ViewDepth = viewPos.z;
-    
-    return output;
-}
-
-GBufferOutput LOD2PSMain(LOD2VSOutput input)
-{
-    GBufferOutput o;
-    
-    // Use distance-based color for LOD2
-    float depth = saturate(input.ViewDepth / 300.0f);
-    float4 albedo = float4(depth, depth * 0.5f, 1.0f - depth, 1.0f);
-    
-float roughness = 0.45f;
-float metallic = 0.0f;
-float ao = 1.0f;
-
-o.AlbedoSpec = float4(albedo.rgb, roughness);
-o.WorldPos = float4(input.WorldPos, 1.0f);
-o.Normal = float4(0.5f, 0.5f, 1.0f, 1.0f);
-o.Depth = float4(depth, metallic, ao, 1.0f);
-    
-    return o;
-}
-
-struct LOD1VSInstancedInput
-{
-    float3 Position : POSITION;
-    float3 Normal : NORMAL;
-    float4 Color : COLOR;
-    float2 TexCoord : TEXCOORD;
-    
-    float3 InstancePos : INSTANCEPOS;
-    float InstanceScale : INSTANCESCALE;
-    float3 InstanceColor : INSTANCECOLOR;
-    float InstancePadding : INSTANCEPADDING;
-};
-
-struct LOD1VSInstancedOutput
-{
-    float4 PosH : SV_POSITION;
-    float3 WorldPos : TEXCOORD0;
-    float3 NormalW : TEXCOORD1;
-    float2 UV : TEXCOORD2;
-    float ViewDepth : TEXCOORD3;
-    float4 Color : COLOR;
-};
-
-LOD1VSInstancedOutput LOD1VSInstanced(LOD1VSInstancedInput input)
-{
-    LOD1VSInstancedOutput output;
-    
-    float3 scaledPos = input.Position * input.InstanceScale;
-    float3 worldPos = scaledPos + input.InstancePos;
-    
-    float4 viewPos = mul(float4(worldPos, 1.0f), View);
-    output.PosH = mul(viewPos, Proj);
-    output.WorldPos = worldPos;
-    output.NormalW = normalize(mul(float4(input.Normal, 0.0f), World).xyz);
-    output.UV = input.TexCoord;
-    output.ViewDepth = viewPos.z;
-    output.Color = float4(input.InstanceColor, 1.0f);
-    
-    return output;
-}
-
-GBufferOutput LOD1PSInstanced(LOD1VSInstancedOutput input)
-{
-    GBufferOutput o;
-    
-    float4 albedo = input.Color;
-    float3 normal = normalize(input.NormalW);
-    float depth = saturate(input.ViewDepth / 300.0f);
-    
-float roughness = 0.45f;
-float metallic = 0.0f;
-float ao = 1.0f;
-
-o.AlbedoSpec = float4(albedo.rgb, roughness);
-o.WorldPos = float4(input.WorldPos, 1.0f);
-o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
-o.Depth = float4(depth, metallic, ao, 1.0f);
-    
-    return o;
-}
-
-struct LOD2VSInstancedInput
-{
-    float3 Position : POSITION;
-    
-    float3 InstancePos : INSTANCEPOS;
-    float InstanceScale : INSTANCESCALE;
-    float3 InstanceColor : INSTANCECOLOR;
-    float InstancePadding : INSTANCEPADDING;
-};
-
-struct LOD2VSInstancedOutput
-{
-    float4 PosH : SV_POSITION;
-    float3 WorldPos : TEXCOORD0;
-    float ViewDepth : TEXCOORD3;
-    float4 Color : COLOR;
-};
-
-LOD2VSInstancedOutput LOD2VSInstanced(LOD2VSInstancedInput input)
-{
-    LOD2VSInstancedOutput output;
-    
-    float3 scaledPos = input.Position * input.InstanceScale;
-    float3 worldPos = scaledPos + input.InstancePos;
-    
-    float4 viewPos = mul(float4(worldPos, 1.0f), View);
-    output.PosH = mul(viewPos, Proj);
-    output.WorldPos = worldPos;
-    output.ViewDepth = viewPos.z;
-    output.Color = float4(input.InstanceColor, 1.0f);
-    
-    return output;
-}
-
-GBufferOutput LOD2PSInstanced(LOD2VSInstancedOutput input)
-{
-    GBufferOutput o;
-    
-    float depth = saturate(input.ViewDepth / 300.0f);
-    float4 albedo = float4(depth, depth * 0.5f, 1.0f - depth, 1.0f);
+    float depth = saturate(input.ViewDepth / 100.0f);
     
     o.AlbedoSpec = albedo;
-float roughness = 0.45f;
-float metallic = 0.0f;
-float ao = 1.0f;
-
-o.AlbedoSpec = float4(albedo.rgb, roughness);
-o.WorldPos = float4(input.WorldPos, 1.0f);
-o.Normal = float4(0.5f, 0.5f, 1.0f, 1.0f);
-o.Depth = float4(depth, metallic, ao, 1.0f);
+    o.WorldPos = float4(input.WorldPos, 1.0f);
+    o.Normal = float4(normal * 0.5f + 0.5f, 1.0f);
+    o.Depth = float4(depth, depth, depth, 1.0f);
     
     return o;
-}
-
-
-struct Particle
-{
-    float3 Position;
-    float Life;
-    float3 Velocity;
-    float LifeSpan;
-    float4 Color;
-    float Size;
-    float Weight;
-    float Age;
-    float Rotation;
-};
-
-struct SortEntry
-{
-    uint ParticleIndex;
-    float DistanceSq;
-    float Padding0;
-    float Padding1;
-};
-
-RWStructuredBuffer<Particle> g_Particles : register(u0);
-
-#if defined(PARTICLE_INIT) || defined(PARTICLE_UPDATE)
-AppendStructuredBuffer<uint> g_DeadListAppend : register(u1);
-#endif
-
-#if defined(PARTICLE_EMIT)
-ConsumeStructuredBuffer<uint> g_DeadListConsume : register(u1);
-#endif
-
-#if defined(PARTICLE_INIT)
-RWStructuredBuffer<SortEntry> g_SortList : register(u2);
-#endif
-
-#if defined(PARTICLE_UPDATE)
-AppendStructuredBuffer<SortEntry> g_AliveSortList : register(u2);
-#endif
-
-#if defined(PARTICLE_CLEAR_SORT) || defined(PARTICLE_SORT)
-RWStructuredBuffer<SortEntry> g_SortList : register(u2);
-#endif
-
-cbuffer ParticleCb : register(b0)
-{
-    float4 C0;
-    float4 C1;
-    float4 C2;
-    float4 C3;
-    float4 C4;
-    float4 C5;
-    float4 C6;
-};
-
-float HashFloat(uint x)
-{
-    x ^= x >> 16;
-    x *= 0x7feb352d;
-    x ^= x >> 15;
-    x *= 0x846ca68b;
-    x ^= x >> 16;
-    return (x & 0x00FFFFFFu) / 16777215.0f;
-}
-
-[numthreads(256,1,1)]
-void ParticleInitDeadListCS(uint3 DTid : SV_DispatchThreadID)
-{
-    uint index = DTid.x;
-    uint maxParticles = asuint(C0.z);
-    if (index >= maxParticles)
-        return;
-
-    Particle p = (Particle)0;
-    p.Life = -1.0f;
-    p.LifeSpan = 0.0f;
-    p.Age = 0.0f;
-    p.Rotation = 0.0f;
-    g_Particles[index] = p;
-
-#if defined(PARTICLE_INIT)
-    SortEntry s;
-    s.ParticleIndex = 0xFFFFFFFFu;
-    s.DistanceSq = -1.0f;
-    s.Padding0 = 0.0f;
-    s.Padding1 = 0.0f;
-    g_SortList[index] = s;
-
-    g_DeadListAppend.Append(index);
-#endif
-}
-
-[numthreads(256,1,1)]
-void ParticleEmitCS(uint3 DTid : SV_DispatchThreadID)
-{
-    uint i = DTid.x;
-
-    float3 emitter = C0.xyz;
-    uint emitCount = asuint(C0.w);
-    float3 baseVel = C1.xyz;
-    float time = C1.w;
-    float3 velRnd = C2.xyz;
-    float minLife = C2.w;
-    float maxLife = C3.x;
-    float minSize = C3.y;
-    float maxSize = C3.z;
-    uint seed = asuint(C3.w);
-    float4 colorA = C4;
-    float4 colorB = C5;
-    float emitterRadius = C6.x;
-
-    if (i >= emitCount)
-        return;
-
-#if defined(PARTICLE_EMIT)
-    uint deadIndex = g_DeadListConsume.Consume();
-
-    uint h0 = i * 1664525u + seed + asuint(time * 1000.0f);
-    uint h1 = h0 * 22695477u + 1u;
-    uint h2 = h1 * 22695477u + 1u;
-
-    float rx = HashFloat(h0) * 2.0f - 1.0f;
-    float ry = HashFloat(h1) * 2.0f - 1.0f;
-    float rz = HashFloat(h2) * 2.0f - 1.0f;
-    float rand0 = HashFloat(h0 ^ 0x68e31da4u);
-    float rand1 = HashFloat(h1 ^ 0xb5297a4du);
-    float randY = HashFloat(h2 ^ 0x1b56c4e9u);
-    float t = HashFloat(h2 ^ 0x9e3779b9u);
-    float angle = rand0 * 6.2831853f;
-    float radius = sqrt(rand1) * emitterRadius;
-
-    Particle p;
-    p.Position = emitter + float3(cos(angle) * radius, randY * 3.0f, sin(angle) * radius);
-    p.Velocity = baseVel + float3(rx * velRnd.x, abs(ry) * velRnd.y, rz * velRnd.z);
-    p.LifeSpan = lerp(minLife, maxLife, t);
-    p.Life = p.LifeSpan;
-    p.Color = lerp(colorA, colorB, t);
-    p.Size = lerp(minSize, maxSize, HashFloat(h1 ^ 0x85ebca6bu));
-    p.Weight = 0.7f + HashFloat(h2 ^ 0xc2b2ae35u) * 0.8f;
-    p.Age = 0.0f;
-    p.Rotation = HashFloat(h0 ^ 0x27d4eb2du) * 6.2831853f;
-
-    g_Particles[deadIndex] = p;
-#endif
-}
-
-[numthreads(256,1,1)]
-void ParticleUpdateCS(uint3 DTid : SV_DispatchThreadID)
-{
-    uint index = DTid.x;
-
-    float dt = C0.x;
-    uint maxParticles = asuint(C0.z);
-    float3 gravity = C1.xyz;
-    float groundY = C1.w;
-    float3 cameraPos = C2.xyz;
-    uint useGround = asuint(C2.w);
-
-    if (index >= maxParticles)
-        return;
-
-    Particle p = g_Particles[index];
-    if (p.Life <= 0.0f)
-        return;
-
-    p.Age += dt;
-    p.Life -= dt;
-
-    p.Velocity += gravity * p.Weight * dt;
-    p.Position += p.Velocity * dt;
-
-    if (p.Life <= 0.0f)
-    {
-        p.Life = -1.0f;
-        g_Particles[index] = p;
-
-#if defined(PARTICLE_UPDATE)
-        g_DeadListAppend.Append(index);
-#endif
-        return;
-    }
-
-    // Bounce from floor instead of dying on contact.
-    if (useGround != 0 && p.Position.y <= groundY && p.Velocity.y < 0.0f)
-    {
-        float bounce = 0.65f;
-        float friction = 0.82f;
-
-        p.Position.y = groundY;
-        p.Velocity.y = -p.Velocity.y * bounce;
-        p.Velocity.x *= friction;
-        p.Velocity.z *= friction;
-    }
-
-    g_Particles[index] = p;
-
-#if defined(PARTICLE_UPDATE)
-    float3 toCam = p.Position - cameraPos;
-
-    SortEntry s;
-    s.ParticleIndex = index;
-    s.DistanceSq = dot(toCam, toCam);
-    s.Padding0 = 0.0f;
-    s.Padding1 = 0.0f;
-    g_AliveSortList.Append(s);
-#endif
-}
-
-[numthreads(256,1,1)]
-void BitonicSortCS(uint3 DTid : SV_DispatchThreadID)
-{
-    uint i = DTid.x;
-    uint elementCount = asuint(C0.x);
-    uint subArray = asuint(C0.y);
-    uint compareDistance = asuint(C0.z);
-    uint sortDescending = asuint(C0.w);
-
-    if (i >= elementCount)
-        return;
-
-#if defined(PARTICLE_SORT)
-    uint j = i ^ compareDistance;
-    if (j > i && j < elementCount)
-    {
-        SortEntry a = g_SortList[i];
-        SortEntry b = g_SortList[j];
-
-        bool ascending = ((i & subArray) == 0);
-        if (sortDescending != 0)
-            ascending = !ascending;
-
-        bool swapNeeded = ascending ? (a.DistanceSq > b.DistanceSq) : (a.DistanceSq < b.DistanceSq);
-        if (swapNeeded)
-        {
-            g_SortList[i] = b;
-            g_SortList[j] = a;
-        }
-    }
-#endif
-}
-
-[numthreads(256,1,1)]
-void ClearSortListCS(uint3 DTid : SV_DispatchThreadID)
-{
-    uint index = DTid.x;
-    uint maxParticles = asuint(C0.x);
-
-    if (index >= maxParticles)
-        return;
-
-#if defined(PARTICLE_CLEAR_SORT)
-    SortEntry s;
-    s.ParticleIndex = 0xFFFFFFFFu;
-    s.DistanceSq = -1.0f;
-    s.Padding0 = 0.0f;
-    s.Padding1 = 0.0f;
-    g_SortList[index] = s;
-#endif
-}
-
-// =========================
-// RENDER
-// =========================
-
-StructuredBuffer<Particle> g_ParticlesRO : register(t0);
-StructuredBuffer<SortEntry> g_SortListRO : register(t1);
-
-cbuffer ParticleRenderConstants : register(b0)
-{
-    float4x4 gParticleViewProj;
-    float3 gParticleCameraRight;
-    float gParticlePadding1;
-    float3 gParticleCameraUp;
-    float gParticlePadding2;
-    float3 gParticleLightDir;
-    float gParticleLightIntensity;
-    float4 gParticleLightColor;
-    float4 gParticleAmbient;
-};
-
-struct ParticleVSOutput
-{
-    float3 CenterW : TEXCOORD0;
-    float4 Color : COLOR0;
-    float Size : TEXCOORD1;
-    uint Alive : TEXCOORD2;
-};
-
-ParticleVSOutput ParticleVSMain(uint vertexId : SV_VertexID)
-{
-    ParticleVSOutput o;
-
-    SortEntry se = g_SortListRO[vertexId];
-    if (se.ParticleIndex == 0xFFFFFFFFu)
-    {
-        o.CenterW = float3(0.0f, 0.0f, 0.0f);
-        o.Color = float4(0, 0, 0, 0);
-        o.Size = 0.0f;
-        o.Alive = 0;
-        return o;
-    }
-
-    Particle p = g_ParticlesRO[se.ParticleIndex];
-    if (p.Life <= 0.0f)
-    {
-        o.CenterW = float3(0.0f, 0.0f, 0.0f);
-        o.Color = float4(0, 0, 0, 0);
-        o.Size = 0.0f;
-        o.Alive = 0;
-        return o;
-    }
-
-    float3 L = normalize(-gParticleLightDir);
-    float ndl = saturate(dot(float3(0.0f, 1.0f, 0.0f), L) * 0.5f + 0.5f);
-    float3 light = gParticleAmbient.rgb + gParticleLightColor.rgb * (gParticleLightIntensity * ndl);
-
-    float lifeRatio = saturate(p.Life / max(p.LifeSpan, 0.001f));
-
-    o.CenterW = p.Position;
-    o.Color = float4(saturate(p.Color.rgb * light), lifeRatio);
-    o.Size = p.Size;
-    o.Alive = 1;
-    return o;
-}
-
-struct ParticleGSOutput
-{
-    float4 PositionH : SV_POSITION;
-    float4 Color : COLOR0;
-};
-
-[maxvertexcount(4)]
-void ParticleGSMain(point ParticleVSOutput input[1], inout TriangleStream<ParticleGSOutput> triStream)
-{
-    if (input[0].Alive == 0 || input[0].Size <= 0.0f || input[0].Color.a <= 0.0f)
-        return;
-
-    float halfSize = input[0].Size;
-    float3 center = input[0].CenterW;
-
-    float3 corners[4];
-    corners[0] = center + (-gParticleCameraRight - gParticleCameraUp) * halfSize;
-    corners[1] = center + (-gParticleCameraRight + gParticleCameraUp) * halfSize;
-    corners[2] = center + ( gParticleCameraRight - gParticleCameraUp) * halfSize;
-    corners[3] = center + ( gParticleCameraRight + gParticleCameraUp) * halfSize;
-
-    ParticleGSOutput v;
-
-    v.Color = input[0].Color;
-    v.PositionH = mul(float4(corners[0], 1.0f), gParticleViewProj);
-    triStream.Append(v);
-
-    v.Color = input[0].Color;
-    v.PositionH = mul(float4(corners[1], 1.0f), gParticleViewProj);
-    triStream.Append(v);
-
-    v.Color = input[0].Color;
-    v.PositionH = mul(float4(corners[2], 1.0f), gParticleViewProj);
-    triStream.Append(v);
-
-    v.Color = input[0].Color;
-    v.PositionH = mul(float4(corners[3], 1.0f), gParticleViewProj);
-    triStream.Append(v);
-
-    triStream.RestartStrip();
-}
-
-float4 ParticlePSMain(ParticleGSOutput input) : SV_TARGET
-{
-    return input.Color;
-}
-
-struct PostProcessInput
-{
-    float4 Position : SV_POSITION;
-    float2 UV : TEXCOORD0;
-};
-
-PostProcessInput PostProcessVSMain(uint vertexId : SV_VertexID)
-{
-    PostProcessInput output;
-
-    float2 uv = float2((vertexId << 1) & 2, vertexId & 2);
-
-    output.Position = float4(
-        uv * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f),
-        0.0f,
-        1.0f);
-
-    output.UV = uv;
-
-    return output;
-}
-
-float Hash12(float2 p)
-{
-    float3 p3 = frac(float3(p.xyx) * 0.1031f);
-    p3 += dot(p3, p3.yzx + 33.33f);
-    return frac((p3.x + p3.y) * p3.z);
-}
-
-float3 ApplyColorCorrection(float3 color, float contrast, float saturation)
-{
-    color = (color - 0.5f) * contrast + 0.5f;
-
-    float luminance = dot(color, float3(0.2126f, 0.7152f, 0.0722f));
-    color = lerp(float3(luminance, luminance, luminance), color, saturation);
-
-    float3 tint = float3(1.03f, 1.00f, 0.96f);
-    color *= tint;
-
-    return color;
-}
-
-float3 ApplyVCRFilter(float2 uv, float2 pixelPos, float time, float strength)
-{
-    float scanY = floor(pixelPos.y);
-    float frame = floor(time * 24.0f);
-
-    float wobble =
-        sin(uv.y * 42.0f + time * 3.2f) * 1.2f +
-        sin(uv.y * 137.0f - time * 6.7f) * 0.45f;
-
-    float lineNoise = Hash12(float2(scanY * 0.031f, frame));
-    float lineJitter = (lineNoise - 0.5f) * 3.0f;
-
-    float tearCenter = Hash12(float2(frame, 17.23f));
-    float tearBand = 1.0f - smoothstep(0.0f, 0.035f, abs(uv.y - tearCenter));
-    float tearNoise = Hash12(float2(frame * 3.1f, scanY * 0.007f));
-    float tearOffset = tearBand * (tearNoise - 0.5f) * 18.0f;
-
-    float xOffsetPixels = wobble + lineJitter + tearOffset;
-    float2 distortedUv = saturate(uv + float2(xOffsetPixels * PostScreenSize.z, 0.0f));
-
-    float chromaPixels = 2.0f + tearBand * 3.0f;
-    float2 chromaOffset = float2(chromaPixels * PostScreenSize.z, 0.0f);
-
-    float3 color;
-    color.r = SceneColor.Sample(gSampler, saturate(distortedUv + chromaOffset)).r;
-    color.g = SceneColor.Sample(gSampler, distortedUv).g;
-    color.b = SceneColor.Sample(gSampler, saturate(distortedUv - chromaOffset)).b;
-
-    float3 bleedA = SceneColor.Sample(
-        gSampler,
-        saturate(distortedUv - float2(PostScreenSize.z * 2.0f, 0.0f))
-    ).rgb;
-
-    float3 bleedB = SceneColor.Sample(
-        gSampler,
-        saturate(distortedUv + float2(PostScreenSize.z * 2.0f, 0.0f))
-    ).rgb;
-
-    color = lerp(color, (color + bleedA + bleedB) / 3.0f, 0.18f);
-
-    float scanline = 0.86f + 0.14f * sin(pixelPos.y * 3.14159265f);
-    color *= scanline;
-
-    float tapeNoise = Hash12(pixelPos + time * 83.0f) - 0.5f;
-    color += tapeNoise * 0.055f;
-
-    float speck = smoothstep(0.995f, 1.0f, Hash12(pixelPos * 0.37f + frame));
-    color += speck * 0.20f;
-
-    float trackingBand =
-        1.0f - smoothstep(
-            0.0f,
-            0.018f,
-            abs(uv.y - frac(time * 0.17f))
-        );
-
-    color *= 1.0f - trackingBand * 0.18f;
-
-    float luminance = dot(color, float3(0.2126f, 0.7152f, 0.0722f));
-    color = lerp(float3(luminance, luminance, luminance), color, 0.78f);
-    color = (color - 0.5f) * 1.12f + 0.5f;
-
-    float3 clean = SceneColor.Sample(gSampler, uv).rgb;
-
-    return lerp(clean, max(color, 0.0f), strength);
-}
-
-float ComputeGBufferEdge(int2 pixelPos)
-{
-    float centerDepth = GDepth.Load(int3(pixelPos, 0)).x;
-    float3 centerNormal = GNormal.Load(int3(pixelPos, 0)).xyz * 2.0f - 1.0f;
-
-    float edge = 0.0f;
-
-    int2 offsets[4] =
-    {
-        int2(1, 0),
-        int2(-1, 0),
-        int2(0, 1),
-        int2(0, -1)
-    };
-
-int2 screenSize = int2(PostScreenSize.xy);
-
-[unroll]
-for (int i = 0; i < 4; ++i)
-{
-    int2 samplePos = clamp(pixelPos + offsets[i], int2(0, 0), screenSize - int2(1, 1));
-
-    float sampleDepth = GDepth.Load(int3(samplePos, 0)).x;
-    float3 sampleNormal = GNormal.Load(int3(samplePos, 0)).xyz * 2.0f - 1.0f;
-
-    float depthDiff = abs(centerDepth - sampleDepth);
-    float normalDiff = 1.0f - saturate(dot(normalize(centerNormal), normalize(sampleNormal)));
-
-    edge = max(edge, depthDiff * 35.0f);
-    edge = max(edge, normalDiff * 2.0f);
-}
-
-    return saturate(edge);
-}
-
-float4 PostProcessPSMain(PostProcessInput input) : SV_TARGET
-{
-    float2 uv = input.UV;
-    float2 center = float2(0.5f, 0.5f);
-    float2 fromCenter = uv - center;
-    float distanceFromCenter = length(fromCenter);
-
-    float vignetteStrength = PostParams0.x;
-    float chromaticStrength = PostParams0.y;
-    float grainStrength = PostParams0.z;
-    float edgeStrength = PostParams0.w;
-
-    float time = PostParams1.x;
-    float contrast = PostParams1.y;
-    float saturation = PostParams1.z;
-
-float vcrStrength = chromaticStrength;
-float3 color = ApplyVCRFilter(uv, input.Position.xy, time, vcrStrength);
-
-
-if (PostParams1.w > 0.5f)
-{
-    return float4(saturate(color), 1.0f);
-}
-
-    // 1. Vignette
-    float vignette = smoothstep(0.95f, 0.20f, distanceFromCenter);
-    color *= lerp(1.0f, vignette, vignetteStrength);
-
-    // 2. Color correction
-    color = ApplyColorCorrection(color, contrast, saturation);
-
-    // 3. G-buffer edge detection: uses GDepth and GNormal
-    int2 pixelPos = int2(input.Position.xy);
-    float edge = ComputeGBufferEdge(pixelPos);
-    color = lerp(color, color * 0.12f, edge * edgeStrength);
-
-    // 4. Film grain
-    float grain = Hash12(input.Position.xy + time * 60.0f) - 0.5f;
-    color += grain * grainStrength;
-
-color = max(color, 0.0f);
-
-color *= 1.25f;
-color = color / (color + 1.0f);
-
-color = pow(saturate(color), 1.0f / 2.2f); 
-
-return float4(color, 1.0f);
 }
