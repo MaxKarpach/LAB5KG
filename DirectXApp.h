@@ -106,9 +106,11 @@ private:
     void CreateUploadBuffer(const void* data, UINT64 dataSize,
         ComPtr<ID3D12Resource>& outputBuffer);
 
-    ComPtr<ID3DBlob> CompileShaderFile(const std::wstring& filePath,
+    ComPtr<ID3DBlob> CompileShaderFile(
+        const std::wstring& filePath,
         const std::string& entryPoint,
-        const std::string& shaderModel);
+        const std::string& shaderModel,
+        const D3D_SHADER_MACRO* defines = nullptr);
 
     struct DeferredLightCB
     {
@@ -122,8 +124,13 @@ private:
         DirectX::XMFLOAT4 SpotLightDirectionCosine[4];
         DirectX::XMFLOAT4 SpotLightColorIntensity[4];
         DirectX::XMFLOAT4 ScreenSize;
+        DirectX::XMFLOAT4 CameraPosition;
         DirectX::XMFLOAT4X4 InvView;
         DirectX::XMFLOAT4X4 InvProj;
+        DirectX::XMFLOAT4X4 LightViewProj[4];
+        DirectX::XMFLOAT4 CascadeSplits;
+        DirectX::XMFLOAT4 ShadowParams; // x = bias, y = shadowMapSize, z = cascadeCount
+        DirectX::XMFLOAT4 DebugParams; // x = shadow debug mode
     };
 
     // Window properties
@@ -374,7 +381,23 @@ private:
 
     // Флаги для управления рендером
     const bool renderSponza = false;
-    const bool renderWater = true;
+    const bool renderWater = false;
+
+    // Визуализация KD-дерева
+    bool m_showKDTree = true;          // всегда показывать при режиме Octree
+    ComPtr<ID3D12Resource> m_kdLineVertexBuffer;
+    ComPtr<ID3D12Resource> m_kdLineUploadBuffer;   // необязательно, можно один буфер
+    D3D12_VERTEX_BUFFER_VIEW m_kdLineBufferView;
+    UINT m_kdLineVertexCount = 0;
+
+    ComPtr<ID3D12RootSignature> m_kdLineRootSignature;
+    ComPtr<ID3D12PipelineState> m_kdLinePSO;
+    ComPtr<ID3D12Resource> m_kdLineConstantBuffer;
+    void* m_mappedKDLineCB = nullptr;
+
+    void BuildKDTreeLines();                // генерация вершин линий
+    void CreateKDLinePipeline();            // создание PSO и корневой подписи
+    void RenderKDTreeLines();               // отрисовка линий
 
     void SetCullingMode(CullingMode mode);
     CullingMode GetCullingMode() const { return m_cullingMode; }
@@ -383,6 +406,7 @@ private:
     // Для обработки нажатий клавиш
     bool m_prevCKey = false;
     bool m_prevVKey = false;
+
 
     void CreateInstancedPipeline();
     void CreateInstanceBuffer();
@@ -396,4 +420,319 @@ private:
 
     // Буфер для временного хранения данных видимых инстансов
     std::vector<InstanceData> m_visibleInstanceData;
-};
+    void UpdateCubeColorsByDistance();
+
+    // LOD уровни для кубов
+    ComPtr<ID3D12Resource> m_lod0VertexBuffer;  // Полный куб (24 вершины, 12 треугольников)
+    ComPtr<ID3D12Resource> m_lod0IndexBuffer;
+    D3D12_VERTEX_BUFFER_VIEW m_lod0VertexBufferView;
+    D3D12_INDEX_BUFFER_VIEW m_lod0IndexBufferView;
+    UINT m_lod0IndexCount;
+
+    ComPtr<ID3D12Resource> m_lod1VertexBuffer;  // Средний куб (8 вершин, 6 треугольников - без нормалей)
+    ComPtr<ID3D12Resource> m_lod1IndexBuffer;
+    D3D12_VERTEX_BUFFER_VIEW m_lod1VertexBufferView;
+    D3D12_INDEX_BUFFER_VIEW m_lod1IndexBufferView;
+    UINT m_lod1IndexCount;
+
+    ComPtr<ID3D12Resource> m_lod2VertexBuffer;  // Простой куб (8 вершин, 12 треугольников - без текстур)
+    ComPtr<ID3D12Resource> m_lod2IndexBuffer;
+    D3D12_VERTEX_BUFFER_VIEW m_lod2VertexBufferView;
+    D3D12_INDEX_BUFFER_VIEW m_lod2IndexBufferView;
+    UINT m_lod2IndexCount;
+
+
+    // Функции создания LOD мешей
+    void CreateLOD0Mesh();  // Полный куб с нормалями, текстурой, tangent/binormal
+    void CreateLOD1Mesh();  // Упрощенный куб (только позиция + цвет)
+    void CreateLOD2Mesh();  // Самый простой куб (только позиция)
+
+    ComPtr<ID3D12PipelineState> m_lod0PipelineState;
+    ComPtr<ID3D12PipelineState> m_lod1PipelineState;
+    ComPtr<ID3D12PipelineState> m_lod2PipelineState;
+
+    // Функция определения LOD по расстоянию
+    int GetLODLevel(float distance);
+
+    ComPtr<ID3D12Resource> m_instanceBuffers[3];
+    ComPtr<ID3D12Resource> m_instanceUploadBuffers[3];
+    D3D12_VERTEX_BUFFER_VIEW m_instanceBufferViews[3];
+
+    // Функция обновления буфера для конкретного LOD
+    void UpdateInstanceBufferForLOD(int lod, const std::vector<int>& indices);
+
+    // ========== PARTICLE SYSTEM ==========
+    static constexpr UINT MAX_PARTICLES = 4096;
+    static constexpr UINT PARTICLE_THREADS_PER_GROUP = 256;
+
+    struct GpuParticle
+    {
+        DirectX::XMFLOAT3 Position;
+        float Life;
+        DirectX::XMFLOAT3 Velocity;
+        float LifeSpan;
+        DirectX::XMFLOAT4 Color;
+        float Size;
+        float Weight;
+        float Age;
+        float Padding;
+    };
+
+    struct ParticleSortEntry
+    {
+        uint32_t ParticleIndex;
+        float DistanceSq;
+        float Padding0;
+        float Padding1;
+    };
+
+    struct alignas(16) ParticleEmitConstants
+    {
+        DirectX::XMFLOAT3 EmitterPosition;
+        uint32_t EmitCount;
+
+        DirectX::XMFLOAT3 BaseVelocity;
+        float Time;
+
+        DirectX::XMFLOAT3 VelocityRandomness;
+        float MinLifeSpan;
+
+        float MaxLifeSpan;
+        float MinSize;
+        float MaxSize;
+        uint32_t RandomSeed;
+
+        DirectX::XMFLOAT4 StartColorA;
+        DirectX::XMFLOAT4 StartColorB;
+
+        float EmitterRadius;
+        float Padding1;
+        float Padding2;
+        float Padding3;
+    };
+
+    struct ParticleUpdateConstants
+    {
+        float DeltaTime;
+        float TotalTime;
+        uint32_t MaxParticles;
+        uint32_t Padding0;
+        DirectX::XMFLOAT3 Gravity;
+        float GroundY;
+        DirectX::XMFLOAT3 CameraPosition;
+        uint32_t EnableGroundCollision;
+    };
+
+    struct ParticleRenderConstants
+    {
+        DirectX::XMFLOAT4X4 ViewProj;
+        DirectX::XMFLOAT3 CameraRight;
+        float Padding0;
+        DirectX::XMFLOAT3 CameraUp;
+        float Padding1;
+        DirectX::XMFLOAT3 DirectionalLightDir;
+        float DirectionalLightIntensity;
+        DirectX::XMFLOAT4 DirectionalLightColor;
+        DirectX::XMFLOAT4 AmbientColor;
+    };
+
+    // Particle resources
+    ComPtr<ID3D12Resource> m_particlePool;
+    ComPtr<ID3D12Resource> m_deadList;
+    ComPtr<ID3D12Resource> m_sortList;
+    ComPtr<ID3D12Resource> m_deadListCounter;
+    ComPtr<ID3D12Resource> m_sortListCounter;
+    ComPtr<ID3D12Resource> m_counterResetUpload;
+    ComPtr<ID3D12Resource> m_counterReadback[2];
+    uint32_t* m_counterReadbackMapped[2] = { nullptr, nullptr };
+
+    ComPtr<ID3D12Resource> m_particleEmitCB;
+    ComPtr<ID3D12Resource> m_particleUpdateCB;
+    ComPtr<ID3D12Resource> m_particleRenderCB;
+
+    ComPtr<ID3D12DescriptorHeap> m_particleHeap;
+    UINT m_particleDescSize = 0;
+
+    ComPtr<ID3D12RootSignature> m_particleComputeRS;
+    ComPtr<ID3D12RootSignature> m_particleRenderRS;
+    ComPtr<ID3D12PipelineState> m_particleInitDeadPSO;
+    ComPtr<ID3D12PipelineState> m_particleEmitPSO;
+    ComPtr<ID3D12PipelineState> m_particleUpdatePSO;
+    ComPtr<ID3D12PipelineState> m_particleRenderPSO;
+
+    ComPtr<ID3D12Resource> m_particleQuadVB;
+    ComPtr<ID3D12Resource> m_particleQuadIB;
+    D3D12_VERTEX_BUFFER_VIEW m_particleQuadVbView = {};
+    D3D12_INDEX_BUFFER_VIEW m_particleQuadIbView = {};
+
+    D3D12_RESOURCE_STATES m_particlePoolState = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_RESOURCE_STATES m_deadListState = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_RESOURCE_STATES m_sortListState = D3D12_RESOURCE_STATE_COMMON;
+
+    uint32_t m_aliveParticleCount = 0;
+    uint32_t m_particleFrameCounter = 0;
+    bool m_particlesInitialized = false;
+    bool m_particlesNeedReinit = true;
+    bool m_particlesEnabled = true;
+    float m_particleDeltaTime = 0.0f;
+
+    float m_particleTotalTime = 0.0f;
+
+    bool renderCubes = false;
+    UINT64 m_counterReadbackFenceValues[2] = {};
+    uint32_t m_lastKnownDeadCount = MAX_PARTICLES;
+    ComPtr<ID3D12PipelineState> m_particleSortPSO;
+
+    // Particle methods
+    void InitializeParticleSystem();
+    void ReinitializeParticles();
+    void UpdateParticles(float deltaTime);
+    void RenderParticles();
+    void CreateParticleQuadGeometry();
+    void CreateParticleRootSignatures();
+    void CreateParticlePipelines();
+    void CreateParticleResources();
+    void ResetParticleCounter(ID3D12Resource* counterResource, uint32_t value);
+    void CopyParticleCounterToReadback(ID3D12Resource* counterResource, ID3D12Resource* readbackResource);
+    void TransitionParticleComputeResources(D3D12_RESOURCE_STATES state);
+
+    static constexpr UINT SHADOW_MAP_SIZE = 2048;
+    static constexpr UINT SHADOW_CASCADE_COUNT = 4;
+    static constexpr UINT SHADOW_SRV_SLOT = 4;
+
+    ComPtr<ID3D12Resource> m_shadowMap;
+    ComPtr<ID3D12DescriptorHeap> m_shadowDsvHeap;
+    ComPtr<ID3D12PipelineState> m_shadowPSO;
+
+    D3D12_VIEWPORT m_shadowViewport = {};
+    D3D12_RECT m_shadowScissor = {};
+    D3D12_RESOURCE_STATES m_shadowMapState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+
+    DirectX::XMFLOAT4X4 m_lightView[SHADOW_CASCADE_COUNT] = {};
+    DirectX::XMFLOAT4X4 m_lightProj[SHADOW_CASCADE_COUNT] = {};
+    DirectX::XMFLOAT4X4 m_lightViewProj[SHADOW_CASCADE_COUNT] = {};
+    DirectX::XMFLOAT4 m_cascadeSplits = {};
+
+    void CreateShadowMap();
+    void CreateShadowPipeline();
+    void UpdateShadowConstants();
+    void RenderShadowPass();
+
+    enum class ShadowDebugMode
+    {
+        Normal = 0,
+        ShadowMask = 1,
+        NoShadows = 2,
+        CascadeColors = 3,
+        CheckerShadows = 4
+    };
+
+    ComPtr<ID3D12Resource> m_shadowConstantBuffer;
+    uint8_t* m_mappedShadowConstantData = nullptr;
+
+    void CreateShadowConstantBuffer();
+
+    ShadowDebugMode m_shadowDebugMode = ShadowDebugMode::Normal;
+    bool m_prevBKey = false;
+
+    struct ParticleSortConstants
+    {
+        uint32_t ElementCount;
+        uint32_t SubArray;
+        uint32_t CompareDistance;
+        uint32_t SortDescending;
+    };
+
+    ComPtr<ID3D12Resource> m_particleSortCB;
+    ComPtr<ID3D12PipelineState> m_particleClearSortPSO;
+
+    void CreateSceneColorTarget();
+    void CreatePostProcessRootSignature();
+    void CreatePostProcessPipeline();
+    void CreatePostProcessConstantBuffer();
+    void RenderPostProcessPass();
+
+    struct PostProcessCB
+    {
+        DirectX::XMFLOAT4 ScreenSize; // x=width, y=height, z=1/width, w=1/height
+        DirectX::XMFLOAT4 Params0;    // x=vignette, y=chromatic, z=grain, w=color amount
+        DirectX::XMFLOAT4 Params1;    // x=time, y=contrast, z=saturation, w=unused
+    };
+
+    ComPtr<ID3D12Resource> m_sceneColor;
+    ComPtr<ID3D12DescriptorHeap> m_sceneColorRTVHeap;
+
+    ComPtr<ID3D12RootSignature> m_postProcessRootSignature;
+    ComPtr<ID3D12PipelineState> m_postProcessPSO;
+    ComPtr<ID3D12Resource> m_postProcessConstantBuffer;
+    PostProcessCB* m_mappedPostProcessData = nullptr;
+
+    float m_postProcessTime = 0.0f;
+
+    // Post-process toggles
+    bool m_enableVCR = true;
+    bool m_enableEdgeDetection = true;
+
+    bool m_prevFKey = false;
+    bool m_prevGKey = false;
+
+    static constexpr UINT SCENE_COLOR_SRV_SLOT = 5;
+    static constexpr UINT IBL_IRRADIANCE_SRV_SLOT = 6;
+    static constexpr UINT IBL_PREFILTER_SRV_SLOT = 7;
+    static constexpr UINT IBL_BRDF_LUT_SRV_SLOT = 8;
+
+    ComPtr<ID3D12Resource> m_irradianceMap;
+    ComPtr<ID3D12Resource> m_prefilteredEnvMap;
+    ComPtr<ID3D12Resource> m_brdfIntegrationMap;
+
+    void LoadIBLTextures();
+    float m_currentNDFMode = 0.0f; // 0 = GGX, 1 = Beckmann
+    bool m_prevNKey = false;
+
+    struct TerrainLodMesh
+    {
+        ComPtr<ID3D12Resource> VertexBuffer;
+        ComPtr<ID3D12Resource> IndexBuffer;
+        D3D12_VERTEX_BUFFER_VIEW VBV = {};
+        D3D12_INDEX_BUFFER_VIEW IBV = {};
+        UINT IndexCount = 0;
+    };
+
+    struct TerrainTile
+    {
+        AABB Bounds;
+        DirectX::XMFLOAT2 Center;
+        float Size = 0.0f;
+        TerrainLodMesh Lod[3];
+    };
+
+    struct TerrainQuadNode
+    {
+        AABB Bounds;
+        int TileIndex = -1;
+        std::unique_ptr<TerrainQuadNode> Children[4];
+
+        bool IsLeaf() const { return TileIndex >= 0; }
+    };
+
+    static constexpr int TERRAIN_TILE_X = 2;
+    static constexpr int TERRAIN_TILE_Z = 2;
+    static constexpr int TERRAIN_TILE_COUNT = 4;
+    static constexpr float TERRAIN_TILE_SIZE = 256.0f;
+    static constexpr float TERRAIN_HEIGHT_SCALE = 80.0f;
+
+    std::vector<TerrainTile> m_terrainTiles;
+    std::unique_ptr<TerrainQuadNode> m_terrainRoot;
+    std::vector<std::pair<int, int>> m_visibleTerrain;
+
+    ComPtr<ID3D12PipelineState> m_terrainPSO;
+
+    void CreateTerrainPipeline();
+    void LoadTerrainTiles(const std::wstring& workingDir);
+    void CreateTerrainTileMesh(TerrainTile& tile, const TextureData& heightmap, int lod);
+    void BuildTerrainQuadTree();
+    void SelectTerrainTiles();
+    void SelectTerrainRecursive(const TerrainQuadNode* node);
+    int GetTerrainLOD(const TerrainTile& tile) const;
+    void RenderTerrain();
+}; 
